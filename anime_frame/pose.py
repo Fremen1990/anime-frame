@@ -8,6 +8,7 @@ are the 33-point pose landmarker. Nothing here opens a camera.
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -115,6 +116,178 @@ def instant_transmission_pose(hands: list[np.ndarray] | None, face: np.ndarray |
     return any(fingers_together(hand) and tips_on_forehead(hand, face) for hand in _hands(hands))
 
 
+def _body_scale(body: np.ndarray | None, confidence: np.ndarray | None = None) -> float:
+    points = _as_points(body, 25)
+    if points is None:
+        return 0.0
+    # Elbows are often hidden by a chair. Shoulders and wrists are the pose.
+    if confidence is not None and any(confidence[index] < 0.35 for index in (11, 12, 15, 16)):
+        return 0.0
+    return _distance(points[11], points[12])
+
+
+def _paired_hands(hands: list[np.ndarray], body: np.ndarray, scale: float) -> tuple[np.ndarray, np.ndarray] | None:
+    valid = list(_hands(hands))
+    if len(valid) < 2:
+        return None
+    wrists = (body[15], body[16])
+    choices = []
+    for first in range(len(valid)):
+        for second in range(len(valid)):
+            if first == second:
+                continue
+            distances = (_distance(valid[first][WRIST], wrists[0]), _distance(valid[second][WRIST], wrists[1]))
+            choices.append((sum(distances), max(distances), valid[first], valid[second]))
+    _, furthest, left, right = min(choices, key=lambda item: item[0])
+    return (left, right) if furthest < 1.6 * scale else None
+
+
+def _fist(hand: np.ndarray) -> bool:
+    return all(_folded(hand, tip, pip) for tip, pip in ((8, 6), (12, 10), (16, 14), (20, 18)))
+
+
+def super_saiyan_pose(hands: list[np.ndarray], body: np.ndarray | None, confidence: np.ndarray | None = None) -> bool:
+    scale = _body_scale(body, confidence)
+    if scale <= 1e-6 or (pair := _paired_hands(hands, body, scale)) is None:
+        return False
+    center_x = (body[11, 0] + body[12, 0]) / 2.0
+    wrists = (body[15], body[16])
+    return (
+        all(_fist(hand) for hand in pair)
+        and abs(wrists[0][0] - wrists[1][0]) > 1.05 * scale
+        and all(abs(wrist[0] - center_x) > 0.45 * scale for wrist in wrists)
+        and all(min(abs(wrist[1] - shoulder[1]) for shoulder in (body[11], body[12])) < 0.6 * scale for wrist in wrists)
+    )
+
+
+def kamehameha_pose(hands: list[np.ndarray], body: np.ndarray | None, confidence: np.ndarray | None = None) -> bool:
+    """Cupped wrists beside either side of the torso, allowing one hidden hand."""
+    scale = _body_scale(body, confidence)
+    points = _as_points(body, 25)
+    if scale <= 1e-6 or points is None:
+        return False
+    wrists = (points[15], points[16])
+    if _distance(*wrists) > 1.05 * scale:
+        return False
+    center = (wrists[0][:2] + wrists[1][:2]) / 2.0
+    shoulder_x = (points[11, 0] + points[12, 0]) / 2.0
+    if not 0.35 * scale < abs(center[0] - shoulder_x) < 1.5 * scale:
+        return False
+    shoulder_y = (points[11, 1] + points[12, 1]) / 2.0
+    hip_y = (points[23, 1] + points[24, 1]) / 2.0
+    if not (shoulder_y + 0.08 * scale < center[1] < hip_y + 0.45 * scale):
+        return False
+    detected = list(_hands(hands))
+    return any(not _fist(hand) and min(_distance(hand[0], wrist) for wrist in wrists) < 0.8 * scale for hand in detected)
+
+
+def hands_in_front(body: np.ndarray | None, confidence: np.ndarray | None = None) -> bool:
+    """Both wrists together in front of the upper torso; depth is checked separately."""
+    scale = _body_scale(body, confidence)
+    points = _as_points(body, 25)
+    if scale <= 1e-6 or points is None:
+        return False
+    center = (points[15] + points[16]) / 2.0
+    shoulders = (points[11] + points[12]) / 2.0
+    hips = (points[23] + points[24]) / 2.0
+    return (
+        _distance(points[15], points[16]) < 1.2 * scale
+        and abs(center[0] - shoulders[0]) < 0.65 * scale
+        and shoulders[1] - 0.5 * scale < center[1] < hips[1] + 0.2 * scale
+    )
+
+
+def kikoho_pose(hands: list[np.ndarray], body: np.ndarray | None, confidence: np.ndarray | None = None) -> bool:
+    """Wrists together in front of the chest. Finger shape is ignored, and one hand mesh is enough."""
+    del hands
+    scale = _body_scale(body, confidence)
+    points = _as_points(body, 25)
+    if scale <= 1e-6 or points is None:
+        return False
+    left, right = points[15], points[16]
+    if _distance(left, right) > 0.95 * scale:
+        return False
+    center = (left[:2] + right[:2]) / 2.0
+    sternum_x = (points[11, 0] + points[12, 0]) / 2.0
+    if abs(float(center[0]) - sternum_x) > 0.48 * scale:
+        return False
+    shoulder_y = (points[11, 1] + points[12, 1]) / 2.0
+    hip_y = (points[23, 1] + points[24, 1]) / 2.0
+    torso = hip_y - shoulder_y
+    if torso <= scale * 0.2:
+        return False
+    return shoulder_y - 0.12 * scale < float(center[1]) < shoulder_y + 0.72 * torso
+
+
+@dataclass(frozen=True)
+class ForwardBaseline:
+    relative_depth: tuple[float, float]
+    elbow_angles: tuple[float, float]
+    shoulder_width: float
+
+
+def _elbow_angle(world: np.ndarray, shoulder: int, elbow: int, wrist: int) -> float:
+    first = world[shoulder] - world[elbow]
+    second = world[wrist] - world[elbow]
+    denominator = float(np.linalg.norm(first) * np.linalg.norm(second))
+    if denominator <= 1e-6:
+        return 0.0
+    return float(np.degrees(np.arccos(np.clip(np.dot(first, second) / denominator, -1, 1))))
+
+
+def forward_baseline(world: np.ndarray | None, confidence: np.ndarray | None = None) -> ForwardBaseline | None:
+    if world is None or np.asarray(world).shape != (33, 3):
+        return None
+    joints = [11, 12, 13, 14, 15, 16]
+    if not np.isfinite(np.asarray(world)[joints]).all():
+        return None
+    if confidence is not None and (len(confidence) < 17 or not np.isfinite(confidence[joints]).all() or np.any(confidence[joints] < 0.35)):
+        return None
+    scale = float(np.linalg.norm(world[11] - world[12]))
+    if scale <= 1e-6:
+        return None
+    return ForwardBaseline(
+        (float(world[15, 2] - world[11, 2]), float(world[16, 2] - world[12, 2])),
+        (_elbow_angle(world, 11, 13, 15), _elbow_angle(world, 12, 14, 16)),
+        scale,
+    )
+
+
+def arm_reach(body: np.ndarray | None) -> tuple[float, float] | None:
+    """Mean shoulder-to-wrist length, and the mean wrist height, in image pixels."""
+    points = _as_points(body, 17)
+    if points is None:
+        return None
+    reach = (_distance(points[11], points[15]) + _distance(points[12], points[16])) / 2.0
+    wrist_y = float(points[15, 1] + points[16, 1]) / 2.0
+    return reach, wrist_y
+
+
+def aimed_at_camera(world: np.ndarray | None, confidence: np.ndarray | None = None) -> bool:
+    """Both wrists are closer to the lens than the elbows and the shoulders.
+
+    MediaPipe's z gets smaller as a joint moves toward the camera. A lean of
+    the whole body does not count, because every joint moves together.
+    """
+    if forward_baseline(world, confidence) is None or world is None:
+        return False
+    points = np.asarray(world)
+    for shoulder, elbow, wrist in ((11, 13, 15), (12, 14, 16)):
+        wrist_z = float(points[wrist, 2])
+        if wrist_z >= float(points[elbow, 2]) - 0.04 or wrist_z >= float(points[shoulder, 2]) - 0.08:
+            return False
+    return True
+
+
+def pushed_forward(baseline: ForwardBaseline, world: np.ndarray | None, confidence: np.ndarray | None = None) -> bool:
+    current = forward_baseline(world, confidence)
+    if current is None:
+        return False
+    depth = [start - end for start, end in zip(baseline.relative_depth, current.relative_depth)]
+    opening = [end - start for start, end in zip(baseline.elbow_angles, current.elbow_angles)]
+    return min(depth) > 0.17 * baseline.shoulder_width and sum(opening) / 2.0 > 10.0
+
+
 def report_pose(debug: bool, effect_id: str, pose_ok: bool, window: PoseWindow) -> None:
     if not debug or not window.sampled:
         return
@@ -123,18 +296,21 @@ def report_pose(debug: bool, effect_id: str, pose_ok: bool, window: PoseWindow) 
     elif window.cleared:
         print(f"{effect_id}: cleared")
     else:
-        print(f"{effect_id}: {'yes' if pose_ok else 'no'} ({window.true_count}/{SAMPLES_TO_FIRE})")
+        print(f"{effect_id}: {'yes' if pose_ok else 'no'} ({window.true_count}/{window.samples_to_fire})")
 
 
 class PoseWindow:
     """Shared gesture window.
 
-    Sample about ten times a second. Fire once when eight of the last ten
-    samples passed. Three failures in a row clear the window. After a fire,
-    the pose must drop before another gesture can fill.
+    Sample about ten times a second. The default fire is eight of the last ten
+    samples, and three failures in a row clear the window. A caller can ask
+    for a shorter hold. After a fire, the pose must drop before another
+    gesture can fill.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, samples_to_fire: int = SAMPLES_TO_FIRE, failures_to_clear: int = FAILURES_TO_CLEAR) -> None:
+        self.samples_to_fire = samples_to_fire
+        self.failures_to_clear = failures_to_clear
         self.samples: deque[bool] = deque(maxlen=WINDOW_SIZE)
         self.fail_run = 0
         self.true_count = 0
@@ -143,15 +319,20 @@ class PoseWindow:
         self.sampled = False
         self._last_time: float | None = None
         self._wait_release = False
+        self._last_observation_id: int | None = None
 
     @property
     def progress(self) -> float:
-        return min(1.0, self.true_count / SAMPLES_TO_FIRE)
+        return min(1.0, self.true_count / self.samples_to_fire)
 
-    def update(self, pose_ok: bool, now: float) -> None:
+    def update(self, pose_ok: bool, now: float, observation_id: int | None = None) -> None:
         self.fired = False
         self.cleared = False
         self.sampled = False
+        if observation_id is not None:
+            if observation_id == self._last_observation_id:
+                return
+            self._last_observation_id = observation_id
         # 0.1 is not exact in binary, so allow a tiny early sample.
         if self._last_time is not None and (now - self._last_time) < SAMPLE_INTERVAL - 1e-4:
             return
@@ -169,7 +350,7 @@ class PoseWindow:
             self.samples.append(True)
         else:
             self.fail_run += 1
-            if self.fail_run >= FAILURES_TO_CLEAR:
+            if self.fail_run >= self.failures_to_clear:
                 self.samples.clear()
                 self.fail_run = 0
                 self.true_count = 0
@@ -177,9 +358,16 @@ class PoseWindow:
                 return
             self.samples.append(False)
         self.true_count = sum(1 for sample in self.samples if sample)
-        if self.true_count >= SAMPLES_TO_FIRE:
+        if self.true_count >= self.samples_to_fire:
             self.fired = True
             self.samples.clear()
             self.true_count = 0
             self.fail_run = 0
             self._wait_release = True
+
+    def arm_release(self) -> None:
+        """A keyboard fire also requires the pose to drop before another fire."""
+        self.samples.clear()
+        self.true_count = 0
+        self.fail_run = 0
+        self._wait_release = True

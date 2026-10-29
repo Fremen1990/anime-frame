@@ -19,6 +19,13 @@ class FrameContext:
     pose_landmarks: np.ndarray | None = None
     keys: set[str] = field(default_factory=set)
     debug: bool = False
+    landmarks_at: float | None = None
+    landmark_timestamp_ms: int | None = None
+    hand_world_landmarks: list[np.ndarray] = field(default_factory=list)
+    pose_world_landmarks: np.ndarray | None = None
+    pose_confidence: np.ndarray | None = None
+    hair_mask: np.ndarray | None = None
+    hair_mask_at: float | None = None
 
 
 class Effect(ABC):
@@ -27,6 +34,12 @@ class Effect(ABC):
     hint: str
     order: int
     replaces_person: bool
+    needs_hair_mask = False
+
+    @property
+    def status(self) -> str:
+        """Optional guidance displayed only in the chooser."""
+        return ""
 
     @abstractmethod
     def reset(self) -> None:

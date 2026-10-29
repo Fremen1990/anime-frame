@@ -38,6 +38,12 @@ def _forehead(face: np.ndarray | None, mask: np.ndarray) -> tuple[float, float]:
     return (x0 + x1) / 2.0, float(y0)
 
 
+def _wipe_amount(progress: float) -> float:
+    """Hold the full figure, then sweep. The body never scales or fades."""
+    start, end = 0.30, 0.72
+    return float(np.clip((progress - start) / (end - start), 0.0, 1.0))
+
+
 def render_transmission(
     background: np.ndarray,
     person: np.ndarray,
@@ -47,15 +53,8 @@ def render_transmission(
     forehead_y: float,
     returning: bool = False,
 ) -> np.ndarray:
-    """Speed lines, then the body collapses through the forehead.
-
-    progress 0 is the start of this direction and 1 is the end. Leave keeps
-    the person for a brief moment, pulls the silhouette out from the forehead
-    downward, and finishes on fading lines. Return brings the lines back first
-    and restores the body from the forehead downward.
-    """
+    """Sweep the full-size figure out from the forehead downward. Streaks stay inside the mask."""
     progress = float(np.clip(progress, 0.0, 1.0))
-    timeline = DURATION * ((1.0 - progress) if returning else progress)
     canvas = background.copy()
     flat = np.squeeze(mask).astype(np.float32)
     points = cv2.findNonZero((flat > 0.01).astype(np.uint8))
@@ -68,46 +67,50 @@ def render_transmission(
     if right <= left or bottom <= top:
         return canvas
     local_mask = flat[top:bottom, left:right]
+    local_person = person[top:bottom, left:right]
+    local_background = background[top:bottom, left:right]
+    amount = _wipe_amount(progress)
     rows = np.arange(top, bottom, dtype=np.float32)[:, None]
-    collapse = float(np.clip((timeline - 0.12) / 0.16, 0.0, 1.0))
-    if collapse <= 0.0:
-        survival = np.ones_like(rows)
-    elif collapse >= 1.0:
-        survival = np.zeros_like(rows)
+    if amount <= 0:
+        survival = np.zeros_like(rows) if returning else np.ones_like(rows)
+    elif amount >= 1:
+        survival = np.ones_like(rows) if returning else np.zeros_like(rows)
     else:
-        amount = (1.0 - collapse) if returning else collapse
-        front = float(forehead_y) + amount * max(bottom - float(forehead_y), 1.0)
-        survival = np.clip((front - rows) / 5.0 + 0.5, 0.0, 1.0)
-        if not returning:
-            survival = 1.0 - survival
-    alpha = (local_mask * survival)[:, :, None]
-    output = person[top:bottom, left:right].astype(np.float32) * alpha
-    output += background[top:bottom, left:right].astype(np.float32) * (1.0 - alpha)
-    strength = min(1.0, timeline / 0.035, max(0.0, (DURATION - timeline) / 0.17))
-    if strength > 0.0:
-        lines = np.zeros((bottom - top, right - left, 3), np.uint8)
+        front = float(forehead_y) + amount * max(float(bottom) - float(forehead_y), 1.0)
+        passed = np.clip((front - rows) / 5.0 + 0.5, 0.0, 1.0)
+        survival = passed if returning else 1.0 - passed
+    alpha = np.clip(local_mask * survival, 0.0, 1.0)[:, :, None]
+    output = local_person.astype(np.float32) * alpha + local_background.astype(np.float32) * (1.0 - alpha)
+
+    if progress < 0.12:
+        streak_strength = progress / 0.12
+    elif progress < 0.88:
+        streak_strength = 1.0
+    else:
+        streak_strength = max(0.0, (1.0 - progress) / 0.12)
+    if streak_strength > 0:
+        lines = np.zeros_like(local_person)
         rng = np.random.default_rng(147)
         span = right - left
+        column_height = bottom - top
         for column in range(2, span, 9):
-            column = min(span - 1, column + int(rng.integers(-2, 4)))
-            length = int(rng.integers(18, 80))
-            offset = int(rng.integers(0, bottom - top + 80))
-            line_y = int((offset + timeline * 1250) % (bottom - top + 160)) - 80
-            color = (255, 255, int(rng.integers(200, 256)))
+            line_x = min(span - 1, column + int(rng.integers(-2, 4)))
+            line_y = int((int(rng.integers(0, column_height + 80)) + progress * 560) % (column_height + 120)) - 60
+            color = (255, 255, int(rng.integers(210, 256)))
             cv2.line(
                 lines,
-                (column, line_y),
-                (column, line_y + length),
+                (line_x, line_y),
+                (line_x, line_y + int(rng.integers(18, 75))),
                 color,
-                int(rng.integers(1, 4)),
+                int(rng.integers(1, 3)),
                 cv2.LINE_AA,
             )
-        if 0.0 < timeline < 0.12:
+        if not returning and 0.04 < progress < 0.28:
             fx = int(round(forehead_x)) - left
             fy = int(round(forehead_y)) - top
-            cv2.line(lines, (fx - 28, fy), (fx + 28, fy), (255, 255, 255), 2, cv2.LINE_AA)
-        glow = lines.astype(np.float32) / 255.0 * local_mask[:, :, None] * strength
-        output = output * (1.0 - glow) + 255.0 * glow
+            cv2.line(lines, (fx - 22, fy), (fx + 22, fy), (255, 255, 255), 2, cv2.LINE_AA)
+        light = lines.astype(np.float32) / 255.0 * local_mask[:, :, None] * streak_strength * 0.85
+        output = output * (1.0 - light) + 255.0 * light
     canvas[top:bottom, left:right] = np.clip(output, 0, 255).astype(np.uint8)
     return canvas
 
@@ -132,8 +135,9 @@ class InstantTransmission(Effect):
         self.window = PoseWindow()
 
     def update(self, ctx: FrameContext) -> np.ndarray:
-        pose_ok = instant_transmission_pose(ctx.hands, ctx.face)
-        self.window.update(pose_ok, ctx.time)
+        fresh = ctx.landmarks_at is None or ctx.time - ctx.landmarks_at <= 0.3
+        pose_ok = fresh and instant_transmission_pose(ctx.hands, ctx.face)
+        self.window.update(pose_ok, ctx.time, ctx.landmark_timestamp_ms if fresh else None)
         report_pose(ctx.debug, self.id, pose_ok, self.window)
         self._handle(ctx)
         return self._render(ctx)
@@ -141,17 +145,28 @@ class InstantTransmission(Effect):
     def _handle(self, ctx: FrameContext) -> None:
         if "escape" in ctx.keys:
             self._on_escape(ctx)
+            return
         trigger = self.window.fired or "return" in ctx.keys
         if not trigger:
             return
         if self.phase == "idle":
+            if "return" in ctx.keys:
+                self.window.arm_release()
             self._begin_leave(ctx)
         elif self.phase == "gone":
+            if "return" in ctx.keys:
+                self.window.arm_release()
             self._begin_return(ctx)
 
     def _on_escape(self, ctx: FrameContext) -> None:
+        if ctx.mask is None or not np.any(ctx.mask):
+            self.reset()
+            return
         if self.phase == "gone":
             self._begin_return(ctx)
+            return
+        if self.phase == "returning":
+            self.reset()
             return
         if self.phase != "leaving" or self.frozen_mask is None:
             return
@@ -171,8 +186,7 @@ class InstantTransmission(Effect):
         audio.play("instant_transmission")
 
     def _begin_return(self, ctx: FrameContext) -> None:
-        if self.frozen_mask is None or self.frozen_person is None:
-            self.phase = "idle"
+        if ctx.mask is None or not np.any(ctx.mask):
             return
         self.phase = "returning"
         self.t0 = ctx.time
@@ -202,20 +216,23 @@ class InstantTransmission(Effect):
                 self.forehead_x,
                 self.forehead_y,
             )
-        if self.phase == "returning" and self.frozen_mask is not None and self.frozen_person is not None:
+        if self.phase == "returning":
             progress = (ctx.time - self.t0) / DURATION
             if progress >= 1.0 - 1e-4:
                 self.phase = "idle"
                 self._clear_frozen()
                 return ctx.frame
             base = ctx.background if ctx.background is not None else ctx.frame
+            if ctx.mask is None or not np.any(ctx.mask):
+                return base.copy()
+            forehead_x, forehead_y = _forehead(ctx.face, ctx.mask)
             return render_transmission(
                 base,
-                self.frozen_person,
-                self.frozen_mask,
+                ctx.frame,
+                ctx.mask,
                 progress,
-                self.forehead_x,
-                self.forehead_y,
+                forehead_x,
+                forehead_y,
                 returning=True,
             )
         if self.phase == "gone":

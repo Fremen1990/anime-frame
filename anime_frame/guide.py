@@ -28,6 +28,27 @@ GUIDES: dict[str, tuple[str, ...]] = {
         "The same pose brings you back.",
         "Return fires it. Escape brings you back.",
     ),
+    "super_saiyan": (
+        "Clench both fists beside your shoulders.",
+        "Hold for about a second to power up.",
+        "Gold hair, flames, and lightning stay on.",
+        "The opening plays once; only the aura sound repeats.",
+        "Repeat the pose or press Escape to turn it off.",
+    ),
+    "kamehameha": (
+        "1. Hands together toward the camera. Hold briefly.",
+        "2. Cup them beside either side of your torso.",
+        "The blue-white core stays ready until you fire.",
+        "3. Push both hands toward the camera again.",
+        "Return advances one stage. Escape cancels.",
+    ),
+    "kikoho": (
+        "Hands together at chest height, aimed at the camera.",
+        "One gesture fires the complete attack immediately.",
+        "The sound and dying glow last about four seconds.",
+        "Lower your hands before another attack.",
+        "Return fires once. Escape cancels.",
+    ),
 }
 
 
@@ -79,9 +100,57 @@ def _draw_transmission(image: np.ndarray, box: tuple[int, int, int, int]) -> Non
     cv2.line(image, (cx - 6, cy - 36), (cx + 22, cy - 36), (255, 255, 255), 2, cv2.LINE_AA)
 
 
+def _draw_power(image: np.ndarray, box: tuple[int, int, int, int]) -> None:
+    x0, y0, x1, _ = box
+    cx, cy = (x0 + x1) // 2, y0 + 135
+    _head(image, (cx, cy), 32)
+    cv2.line(image, (cx, cy + 34), (cx, cy + 117), INK, 2, cv2.LINE_AA)
+    for side in (-1, 1):
+        cv2.line(image, (cx + side * 28, cy + 53), (cx + side * 70, cy + 65), INK, 2, cv2.LINE_AA)
+        cv2.line(image, (cx + side * 70, cy + 65), (cx + side * 78, cy + 10), INK, 2, cv2.LINE_AA)
+        cv2.circle(image, (cx + side * 78, cy + 10), 10, CYAN, 2, cv2.LINE_AA)
+        cv2.line(image, (cx + side * 35, cy - 9), (cx + side * 28, cy - 59), (60, 200, 255), 2, cv2.LINE_AA)
+        cv2.ellipse(image, (cx, cy + 45), (85, 132), 0, 15, 165, (60, 200, 255), 2, cv2.LINE_AA)
+
+
+def _draw_kame(image: np.ndarray, box: tuple[int, int, int, int]) -> None:
+    x0, y0, x1, _ = box
+    step = (x1 - x0) // 3
+    cy = y0 + 125
+    for index, label in enumerate(("1 START", "2 HOLD", "3 FIRE")):
+        cx = x0 + step * index + step // 2
+        _head(image, (cx, cy), 16)
+        cv2.line(image, (cx, cy + 20), (cx, cy + 90), INK, 2, cv2.LINE_AA)
+        hx, hy = (cx + 28, cy + 68) if index == 1 else (cx, cy + 46)
+        for side in (-1, 1):
+            cv2.line(image, (cx + side * 20, cy + 30), (hx + side * 5, hy), INK, 2, cv2.LINE_AA)
+            cv2.circle(image, (hx + side * 5, hy), 7, CYAN, 2, cv2.LINE_AA)
+        if index == 1:
+            cv2.circle(image, (hx, hy), 17, (255, 235, 155), 1, cv2.LINE_AA)
+        else:
+            cv2.ellipse(image, (hx, hy), (23, 18), 0, 0, 360, CYAN, 1, cv2.LINE_AA)
+        cv2.putText(image, label, (cx - 30, cy + 118), cv2.FONT_HERSHEY_SIMPLEX, 0.35, INK, 1, cv2.LINE_AA)
+        if index < 2:
+            cv2.arrowedLine(image, (cx + 30, cy - 40), (cx + step - 30, cy - 40), CYAN, 1, cv2.LINE_AA, tipLength=0.3)
+
+
+def _draw_kiko(image: np.ndarray, box: tuple[int, int, int, int]) -> None:
+    x0, y0, x1, _ = box
+    cx, cy = (x0 + x1) // 2, y0 + 135
+    _head(image, (cx, cy), 32)
+    cv2.line(image, (cx, cy + 34), (cx, cy + 125), INK, 2, cv2.LINE_AA)
+    cv2.line(image, (cx - 34, cy + 56), (cx - 10, cy + 92), INK, 2, cv2.LINE_AA)
+    cv2.line(image, (cx + 34, cy + 56), (cx + 10, cy + 92), INK, 2, cv2.LINE_AA)
+    for radius in (12, 26, 42):
+        cv2.rectangle(image, (cx - radius, cy + 96 - radius), (cx + radius, cy + 96 + radius), (70, 200, 255), 1, cv2.LINE_AA)
+
+
 DRAW = {
     "clear": _draw_clear,
     "instant_transmission": _draw_transmission,
+    "super_saiyan": _draw_power,
+    "kamehameha": _draw_kame,
+    "kikoho": _draw_kiko,
 }
 
 

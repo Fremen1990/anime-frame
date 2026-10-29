@@ -1,15 +1,22 @@
-"""Original one-shot sounds, synthesized on first use and played with afplay."""
+"""Playback through afplay.
+
+Instant Transmission falls back to a short generated wav. Every other effect
+uses selected local recordings. The two prepared Saiyan WAVs contain only
+edits of its recording. Files are never downloaded by the app.
+"""
 
 from __future__ import annotations
 
 import math
 import struct
 import subprocess
+import threading
 import wave
 from pathlib import Path
 
 RATE = 22050
 SOUND_RATES = {"instant_transmission": 44100}
+PREPARED_RECORDINGS = {"super_saiyan_start", "super_saiyan_sustain"}
 
 def default_assets() -> Path:
     return Path(__file__).resolve().parent.parent / "assets"
@@ -49,6 +56,18 @@ SOUNDS = {
 }
 
 
+class _Loop:
+    def __init__(self) -> None:
+        self.stop = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.proc: subprocess.Popen[bytes] | None = None
+
+
+_loops: dict[str, _Loop] = {}
+_oneshots: dict[str, subprocess.Popen[bytes]] = {}
+_loop_lock = threading.Lock()
+
+
 def _write_wav(path: Path, samples: list[float], rate: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     frames = bytearray()
@@ -86,19 +105,116 @@ def ensure_all(root: Path | None = None) -> None:
         ensure(name, root)
 
 
-def sound_path(name: str, root: Path | None = None) -> Path:
-    """A supplied mp3 wins. Otherwise the generated wav is used."""
+def sound_path(name: str, root: Path | None = None) -> Path | None:
+    """A supplied mp3 wins. Only Instant Transmission has a generated fallback."""
     folder = root or default_assets()
     clip = folder / f"{name}.mp3"
     if clip.is_file():
         return clip
+    prepared = folder / f"{name}.wav"
+    if name in PREPARED_RECORDINGS and prepared.is_file():
+        return prepared
+    if name not in SOUNDS:
+        return None
     return ensure(name, root)
 
 
+def start_saiyan() -> None:
+    """The transformation opening happens once; only its steady tail repeats."""
+    stop_saiyan()
+    if all(sound_path(name) is not None for name in PREPARED_RECORDINGS):
+        play("super_saiyan_start")
+        loop("super_saiyan_sustain", after="super_saiyan_start")
+    else:
+        # A missing prepared bed must never resurrect the repeating intro.
+        play("super_saiyan_aura")
+
+
+def stop_saiyan() -> None:
+    for name in ("super_saiyan_sustain", "super_saiyan_start", "super_saiyan_aura", "super_saiyan"):
+        stop(name)
+
+
+def _afplay(destination: Path) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(["/usr/bin/afplay", str(destination)])
+
+
 def play(name: str, root: Path | None = None) -> None:
-    """Play with /usr/bin/afplay. The argument list is fixed."""
+    """Play once with /usr/bin/afplay. The argument list is fixed."""
+    stop(name)
     destination = sound_path(name, root)
+    if destination is None:
+        return
     try:
-        subprocess.Popen(["/usr/bin/afplay", str(destination)])
+        proc = _afplay(destination)
+        with _loop_lock:
+            _oneshots[name] = proc
     except OSError as exc:
         print(f"Could not play sound: {exc}")
+
+
+def _terminate(proc: subprocess.Popen[bytes] | None) -> None:
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=0.3)
+    except ProcessLookupError:
+        pass
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=0.3)
+
+
+def loop(name: str, root: Path | None = None, *, after: str | None = None) -> None:
+    """Loop until stop(), optionally waiting for a named one-shot to finish."""
+    stop(name)
+    destination = sound_path(name, root)
+    if destination is None:
+        return
+    state = _Loop()
+    with _loop_lock:
+        predecessor = _oneshots.get(after) if after is not None else None
+
+    def run() -> None:
+        try:
+            while predecessor is not None and predecessor.poll() is None:
+                if state.stop.wait(0.02):
+                    return
+            while not state.stop.is_set():
+                try:
+                    proc = _afplay(destination)
+                except OSError as exc:
+                    print(f"Could not play sound: {exc}")
+                    return
+                with _loop_lock:
+                    state.proc = proc
+                while proc.poll() is None:
+                    if state.stop.wait(0.02):
+                        _terminate(proc)
+                        return
+                if proc.returncode != 0:
+                    return
+        finally:
+            with _loop_lock:
+                if _loops.get(name) is state:
+                    _loops.pop(name, None)
+
+    state.thread = threading.Thread(target=run, name=f"afplay-{name}", daemon=True)
+    with _loop_lock:
+        _loops[name] = state
+    state.thread.start()
+
+
+def stop(name: str) -> None:
+    """Stop and reap a named one-shot or loop, including a queued hold clip."""
+    with _loop_lock:
+        state = _loops.pop(name, None)
+        proc = _oneshots.pop(name, None)
+    _terminate(proc)
+    if state is None:
+        return
+    state.stop.set()
+    thread = state.thread
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(timeout=0.6)

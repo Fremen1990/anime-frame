@@ -36,11 +36,22 @@ Ship this before any later effect. Other lights can wait.
 
 ## Phase 2 — Signature moves
 
-Build these after Instant Transmission. Each one leaves you in the chair. The pose for Super Saiyan is still open.
+Each one leaves you in the chair. Only Instant Transmission needs the empty room.
 
-- [ ] **Super Saiyan.** Stays in frame. A gold aura locks onto the silhouette and the hair lifts and turns gold. The face stays recognizable.
-- [ ] **Kamehameha.** Stays in frame. Both hands cupped together at the side. A blue-white core charges, then a beam crosses the frame.
-- [ ] **Kikōhō.** Stays in frame. Both hands stacked in front of the chest, fingers forming a triangle, as in the Tri-Beam. A large square beam fires from that shape. This is Tien Shinhan’s attack.
+- [x] **Super Saiyan.** Stays in frame. Both fists beside the shoulders, held until the pose window fills. About 0.7 seconds of power-up, then a gold silhouette aura and gold hair that follow movement. The face stays recognizable. Missing hair detection leaves the aura on. The same pose, or Escape, fades it in about 0.4 seconds.
+- [x] **Kamehameha.** Stays in frame. Both hands cupped together beside the torso. A blue-white core charges. A push forward sends a beam across the frame, away from the hands, in about 0.55 seconds, then a short fade. Return charges; another Return fires manually. Escape cancels.
+- [x] **Kikōhō.** Stays in frame. Thumbs and index fingers form a triangle in front of the chest. A push toward the camera fires a gold-white square blast. Return charges; another Return fires manually. Escape cancels. The chooser title is `Kikōhō`.
+
+### Interaction and audio follow-up — live acceptance pending
+
+The current follow-up supersedes the Phase 2 attack controls above. The selected Dragon Ball recordings are installed locally; see `assets/SOURCES.md`.
+
+- [ ] Super Saiyan: transformation opening once, then a crossfaded sustain made only from the steady portion of the chosen recording. Confirm no opening repeats across several loops.
+- [ ] Kamehameha: forward start → cupped hands beside either side → forward blast, with Charge → Hold → Fire audio. Return advances those three stages. Confirm seated tracking and reliable transitions on both sides.
+- [ ] Kikōhō: direct forward gesture or one Return triggers a single approximately four-second square blast and the full selected recording. No charge or hold. Confirm sound/visual timing feels right.
+- [ ] Confirm Escape, effect/camera switching and recapture stop playback; verify the chooser's stage instructions and clean OBS/Teams output. Recheck 20 fps at 1280×720, or use the documented 960×540 fallback if needed.
+
+Automated tests cover stage order, mirroring and scale, partial hand occlusion, stale/replayed tracking, false pushes, indefinite waiting, keyboard control, cancellation/rearming, and the prepared audio's intro exclusion and continuous sample boundaries. These checks do not replace listening or live camera acceptance.
 
 ## Phase 3 — Presence
 

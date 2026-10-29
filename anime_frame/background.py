@@ -19,6 +19,10 @@ class Background:
         self._started = 0.0
         self._frames: list[tuple[float, np.ndarray]] = []
 
+    @property
+    def started_at(self) -> float:
+        return self._started
+
     def start(self, now: float) -> None:
         if self.capturing:
             return

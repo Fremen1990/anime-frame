@@ -26,6 +26,10 @@ MODELS = {
         "https://storage.googleapis.com/mediapipe-models/image_segmenter/"
         "selfie_segmenter_landscape/float16/latest/selfie_segmenter_landscape.tflite"
     ),
+    "hair_segmenter.tflite": (
+        "https://storage.googleapis.com/mediapipe-models/image_segmenter/"
+        "hair_segmenter/float32/1/hair_segmenter.tflite"
+    ),
 }
 
 

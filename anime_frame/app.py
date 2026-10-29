@@ -6,6 +6,8 @@ import argparse
 import json
 import os
 import time
+import traceback
+from ctypes import CDLL, Structure, c_char_p, c_double, c_ulong, c_void_p
 from pathlib import Path
 
 os.environ.setdefault("GLOG_minloglevel", "2")
@@ -29,7 +31,8 @@ from anime_frame.camera import (
 from anime_frame.downloads import ensure_models
 from anime_frame.effects.base import FrameContext
 from anime_frame.guide import draw_card, draw_countdown
-from anime_frame.landmarks import Landmarks
+from anime_frame.hair import HairTracker
+from anime_frame.landmarks import Landmarks, LandmarkObservation
 from anime_frame.registry import load_effects
 from anime_frame.segment import Segmenter
 
@@ -40,11 +43,169 @@ CHOOSER_TITLE = "Anime Frame"
 CHOOSER_WIDTH = 980
 CHOOSER_HEIGHT = 680
 ROW_TOP = 84
-ROW_HEIGHT = 128
+ROW_HEIGHT = 88
 LIST_LEFT = 20
 LIST_RIGHT = 430
 CARD_BOX = (456, 84, 956, 612)
 LOAD_BACKGROUND = "Load background"
+CAPTURE_RESTART_GAP = 0.75
+WINDOW_MISS_LIMIT = 45
+PREVIEW_STAYS = "Background saved. The preview stays open. Press Q to quit."
+
+
+class _NSRect(Structure):
+    _fields_ = [("x", c_double), ("y", c_double), ("width", c_double), ("height", c_double)]
+
+
+class _NSSize(Structure):
+    _fields_ = [("width", c_double), ("height", c_double)]
+
+
+class _NSPoint(Structure):
+    _fields_ = [("x", c_double), ("y", c_double)]
+
+
+_OBJC = None
+
+
+def _objc():
+    global _OBJC
+    if _OBJC is None:
+        lib = CDLL("/usr/lib/libobjc.A.dylib")
+        CDLL("/System/Library/Frameworks/AppKit.framework/AppKit")
+        lib.objc_getClass.restype = c_void_p
+        lib.objc_getClass.argtypes = [c_char_p]
+        lib.sel_registerName.restype = c_void_p
+        lib.sel_registerName.argtypes = [c_char_p]
+        _OBJC = lib
+    return _OBJC
+
+
+def _msg(obj, name: str, *args, restype=c_void_p, argtypes=None):
+    lib = _objc()
+    lib.objc_msgSend.restype = restype
+    extra = [c_void_p] * len(args) if argtypes is None else list(argtypes)
+    lib.objc_msgSend.argtypes = [c_void_p, c_void_p, *extra]
+    return lib.objc_msgSend(obj, lib.sel_registerName(name.encode()), *args)
+
+
+def main_visible_frame() -> _NSRect | None:
+    """The display with the menu bar, in Cocoa points. Origin is the bottom left."""
+    try:
+        screen = _msg(_objc().objc_getClass(b"NSScreen"), "mainScreen")
+        if not screen:
+            return None
+        rect = _msg(screen, "visibleFrame", restype=_NSRect, argtypes=[])
+    except OSError:
+        return None
+    if rect.width < 800 or rect.height < 600:
+        return None
+    return rect
+
+
+def screen_size() -> tuple[int, int]:
+    rect = main_visible_frame()
+    if rect is None:
+        return 1440, 900
+    return int(rect.width), int(rect.height)
+
+
+def _ns_window(title: str):
+    app = _msg(_objc().objc_getClass(b"NSApplication"), "sharedApplication")
+    windows = _msg(app, "windows") if app else None
+    if not windows:
+        return None
+    count = int(_msg(windows, "count", restype=c_ulong, argtypes=[]))
+    for index in range(count):
+        window = _msg(windows, "objectAtIndex:", index, argtypes=[c_ulong])
+        label = _msg(window, "title")
+        raw = _msg(label, "UTF8String", restype=c_char_p, argtypes=[]) if label else None
+        if raw and raw.decode() == title:
+            return window
+    return None
+
+
+def place_on_main_screen(
+    title: str,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    resize: bool,
+    key: bool = False,
+) -> bool:
+    """Put a window on the main display. OpenCV's moveWindow will not.
+
+    The first tall frame grows onto a display above this one, and moveWindow
+    then keeps using that display. The camera window leaves the screen in front
+    of the person.
+    """
+    window = _ns_window(title)
+    visible = main_visible_frame()
+    if window is None or visible is None:
+        return False
+    if resize:
+        _msg(
+            window,
+            "setContentSize:",
+            _NSSize(float(width), float(height)),
+            restype=None,
+            argtypes=[_NSSize],
+        )
+    frame = _msg(window, "frame", restype=_NSRect, argtypes=[])
+    origin = _NSPoint(visible.x + float(x), visible.y + visible.height - float(y) - frame.height)
+    _msg(window, "setFrameOrigin:", origin, restype=None, argtypes=[_NSPoint])
+    _msg(window, "makeKeyAndOrderFront:" if key else "orderFront:", 0, restype=None, argtypes=[c_void_p])
+    return True
+
+
+def window_layout(screen_w: int, screen_h: int) -> tuple[tuple[int, int, int, int], tuple[int, int]]:
+    """Preview (x, y, width, height) and chooser (x, y), on screen and not covering each other."""
+    margin = 16
+    gap = 12
+    width = max(int(screen_w), 1)
+    height = max(int(screen_h), 1)
+    room = width - CHOOSER_WIDTH - margin * 2 - gap
+    if room >= 320 and height >= CHOOSER_HEIGHT + margin + 40:
+        preview_w = min(960, room)
+        preview_h = min(int(round(preview_w * 9 / 16)), height - margin * 2)
+        preview_w = min(room, max(320, int(round(preview_h * 16 / 9))))
+        preview_h = max(180, int(round(preview_w * 9 / 16)))
+        return (margin, margin, preview_w, preview_h), (margin + preview_w + gap, margin)
+    preview_w = min(960, max(320, width - margin * 2))
+    preview_h = min(int(round(preview_w * 9 / 16)), max(180, height // 3))
+    return (margin, margin, preview_w, preview_h), (margin, margin + preview_h + 36)
+
+
+def window_fate(visible: float, misses: int) -> tuple[str, int]:
+    """Keep a live window. Recreate one OpenCV has lost. Quit only after it stays gone."""
+    if visible >= 1:
+        return "keep", 0
+    misses += 1
+    if misses >= WINDOW_MISS_LIMIT:
+        return "quit", misses
+    if misses in (1, 15, 30):
+        return "revive", misses
+    return "wait", misses
+
+
+def _window_visible(title: str) -> float:
+    try:
+        return float(cv2.getWindowProperty(title, cv2.WND_PROP_VISIBLE))
+    except cv2.error:
+        return -1.0
+
+
+def put_label(image: np.ndarray, label: str, origin: tuple[int, int], scale: float, color: tuple[int, int, int]) -> None:
+    """OpenCV's Hershey face has no macron; draw it over the ASCII glyph."""
+    plain = label.replace("ō", "o")
+    cv2.putText(image, plain, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
+    for index, character in enumerate(label):
+        if character == "ō":
+            prefix = cv2.getTextSize(plain[:index], cv2.FONT_HERSHEY_SIMPLEX, scale, 1)[0][0]
+            glyph = cv2.getTextSize("o", cv2.FONT_HERSHEY_SIMPLEX, scale, 1)[0][0]
+            y = origin[1] - int(round(19 * scale))
+            cv2.line(image, (origin[0] + prefix + 2, y), (origin[0] + prefix + glyph - 2, y), color, 1, cv2.LINE_AA)
 
 OBS_SETUP = """OBS Virtual Camera is not available.
 
@@ -109,20 +270,11 @@ def render_chooser(effects, active_id: str, status: str, countdown: int | None =
         cv2.rectangle(image, (LIST_LEFT, y), (LIST_RIGHT, y + ROW_HEIGHT - 14), fill, -1)
         cv2.rectangle(image, (LIST_LEFT, y), (LIST_RIGHT, y + ROW_HEIGHT - 14), edge, 1, cv2.LINE_AA)
         title_color = (250, 250, 250) if selected else (214, 214, 214)
-        cv2.putText(
-            image,
-            f"{effect.order}   {effect.title}",
-            (LIST_LEFT + 16, y + 42),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.62,
-            title_color,
-            1,
-            cv2.LINE_AA,
-        )
+        put_label(image, f"{effect.order}   {effect.title}", (LIST_LEFT + 16, y + 34), 0.62, title_color)
         cv2.putText(
             image,
             effect.hint,
-            (LIST_LEFT + 16, y + 72),
+            (LIST_LEFT + 16, y + 61),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.46,
             (168, 176, 186),
@@ -138,7 +290,7 @@ def render_chooser(effects, active_id: str, status: str, countdown: int | None =
     cv2.putText(
         image,
         LOAD_BACKGROUND,
-        (LIST_LEFT + 16, load_y + 42),
+        (LIST_LEFT + 16, load_y + 34),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.62,
         (250, 250, 250) if loading else (214, 214, 214),
@@ -148,7 +300,7 @@ def render_chooser(effects, active_id: str, status: str, countdown: int | None =
     cv2.putText(
         image,
         "Step out. Counts down from 3",
-        (LIST_LEFT + 16, load_y + 72),
+        (LIST_LEFT + 16, load_y + 61),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.46,
         (168, 176, 186),
@@ -159,17 +311,14 @@ def render_chooser(effects, active_id: str, status: str, countdown: int | None =
         draw_card(image, active_id, CARD_BOX)
     else:
         draw_countdown(image, CARD_BOX, countdown)
-    footer = status or "Click a row, or press 0-1    Load background    Return fire    Esc cancel"
+    footer = status or "Click a row, or press 0-4    Load background    Return fire    Esc cancel"
     footer_color = (190, 220, 255) if status else (150, 150, 158)
-    cv2.putText(
+    put_label(
         image,
         footer,
         (24, CHOOSER_HEIGHT - 28),
-        cv2.FONT_HERSHEY_SIMPLEX,
         0.48,
         footer_color,
-        1,
-        cv2.LINE_AA,
     )
     return image
 
@@ -212,11 +361,14 @@ class App:
         self.shown = False
         self.clicked_row: int | None = None
         self._timestamp = 0
-        self._hands: list = []
-        self._face = None
-        self._body = None
+        self._observation: LandmarkObservation | None = None
         self._landmarks_at: float | None = None
+        self.hair: HairTracker | None = None
         self._countdown_mark: int | None = None
+        self._screen: tuple[int, int] | None = None
+        self._window_misses: dict[str, int] = {}
+        self._place_again = False
+        self._apply_failed = False
         self.exit_code = 0
 
     def run(self) -> int:
@@ -241,6 +393,8 @@ class App:
         return self.exit_code
 
     def close(self) -> None:
+        if self.active is not None:
+            self.active.reset()
         if self.virtual is not None:
             try:
                 self.virtual.close()
@@ -253,6 +407,9 @@ class App:
         if self.landmarks is not None:
             self.landmarks.close()
             self.landmarks = None
+        if self.hair is not None:
+            self.hair.close()
+            self.hair = None
         if self.camera is not None:
             self.camera.release()
             self.camera = None
@@ -297,14 +454,37 @@ class App:
         models = ROOT / "models"
         self.segmenter = Segmenter(models / "selfie_segmenter_landscape.tflite")
         self.landmarks = Landmarks(models)
+        self.hair = HairTracker(models / "hair_segmenter.tflite")
 
     def _open_windows(self) -> None:
+        self._screen = screen_size()
         cv2.namedWindow(PREVIEW_TITLE, cv2.WINDOW_NORMAL)
         cv2.namedWindow(CHOOSER_TITLE, cv2.WINDOW_AUTOSIZE)
-        cv2.resizeWindow(PREVIEW_TITLE, FRAME_WIDTH, FRAME_HEIGHT)
-        cv2.moveWindow(PREVIEW_TITLE, 40, 40)
-        cv2.moveWindow(CHOOSER_TITLE, 700, 36)
+        self._window_misses = {PREVIEW_TITLE: 0, CHOOSER_TITLE: 0}
+        # The first image forces the window back to the frame size. Place again after that.
+        self._place_again = True
         self._mouse_ready = False
+
+    def _place_windows(self) -> None:
+        if self._screen is None:
+            self._screen = screen_size()
+        preview, chooser = window_layout(*self._screen)
+        preview_ok = place_on_main_screen(PREVIEW_TITLE, *preview, resize=True)
+        chooser_ok = place_on_main_screen(
+            CHOOSER_TITLE,
+            chooser[0],
+            chooser[1],
+            CHOOSER_WIDTH,
+            CHOOSER_HEIGHT,
+            resize=False,
+            key=True,
+        )
+        if preview_ok and chooser_ok:
+            return
+        x, y, width, height = preview
+        cv2.resizeWindow(PREVIEW_TITLE, int(width), int(height))
+        cv2.moveWindow(PREVIEW_TITLE, int(x), int(y))
+        cv2.moveWindow(CHOOSER_TITLE, int(chooser[0]), int(chooser[1]))
 
     def _arm_mouse(self) -> None:
         if self._mouse_ready:
@@ -313,12 +493,13 @@ class App:
         self._mouse_ready = True
 
     def _on_mouse(self, event, x, y, _flags, _param) -> None:
-        if event in (cv2.EVENT_LBUTTONUP, cv2.EVENT_LBUTTONDOWN):
+        # Press and release both arrive. Acting on both restarts the countdown twice per click.
+        if event == cv2.EVENT_LBUTTONUP:
             self.clicked_row = row_at(x, y, len(self.effects) + 1)
 
     def _loop(self) -> None:
         while True:
-            if self.shown and self._windows_closed():
+            if self.shown and not self._keep_windows():
                 break
             try:
                 raw = self.camera.read()
@@ -363,6 +544,7 @@ class App:
                 if not self.background.capturing:
                     self.capture_reason = None
                     self._countdown_mark = None
+                    print(PREVIEW_STAYS, flush=True)
             if self.background.capturing:
                 output = frame
                 countdown = self.background.seconds_left(now)
@@ -371,9 +553,21 @@ class App:
                     self._countdown_mark = countdown
                 status = f"{STEP_OUT} {countdown}"
             else:
-                output = self._apply(frame, now, command)
+                try:
+                    output = self._apply(frame, now, command)
+                except Exception:
+                    if not self._apply_failed:
+                        traceback.print_exc()
+                        self._apply_failed = True
+                    output = frame
+                else:
+                    self._apply_failed = False
+                status = self.active.status
             cv2.imshow(PREVIEW_TITLE, output)
             cv2.imshow(CHOOSER_TITLE, render_chooser(self.effects, self.active.id, status, countdown))
+            if self._place_again:
+                self._place_windows()
+                self._place_again = False
             self._arm_mouse()
             self.shown = True
             if self.virtual is not None and not self._send(output):
@@ -387,8 +581,12 @@ class App:
         # on that cadence and the latest points are reused in between, which keeps
         # a full session around 30 fps on this Mac.
         if self._landmarks_at is None or now - self._landmarks_at >= 0.09:
-            self._hands, self._face, self._body = self.landmarks.detect(frame, timestamp)
+            self._observation = self.landmarks.detect(frame, timestamp)
             self._landmarks_at = now
+        observation = self._observation
+        hair_mask, hair_mask_at = (None, None)
+        if self.active.needs_hair_mask and self.hair is not None:
+            hair_mask, hair_mask_at = self.hair.sample(frame, timestamp, now)
         keys = set()
         if command in {"return", "escape"}:
             keys.add(command)
@@ -397,9 +595,16 @@ class App:
             mask=mask,
             background=self.background.image,
             time=now,
-            hands=self._hands,
-            face=self._face,
-            pose_landmarks=self._body,
+            hands=observation.hands if observation is not None else [],
+            face=observation.face if observation is not None else None,
+            pose_landmarks=observation.body if observation is not None else None,
+            hand_world_landmarks=observation.hand_world if observation is not None else [],
+            pose_world_landmarks=observation.body_world if observation is not None else None,
+            pose_confidence=observation.body_confidence if observation is not None else None,
+            landmarks_at=self._landmarks_at,
+            landmark_timestamp_ms=observation.timestamp_ms if observation is not None else None,
+            hair_mask=hair_mask,
+            hair_mask_at=hair_mask_at,
             keys=keys,
             debug=self.debug,
         )
@@ -430,11 +635,35 @@ class App:
         self.fullscreen = not self.fullscreen
         flag = cv2.WINDOW_FULLSCREEN if self.fullscreen else cv2.WINDOW_NORMAL
         cv2.setWindowProperty(PREVIEW_TITLE, cv2.WND_PROP_FULLSCREEN, flag)
+        if not self.fullscreen:
+            self._place_again = True
 
-    def _windows_closed(self) -> bool:
-        preview = cv2.getWindowProperty(PREVIEW_TITLE, cv2.WND_PROP_VISIBLE)
-        chooser = cv2.getWindowProperty(CHOOSER_TITLE, cv2.WND_PROP_VISIBLE)
-        return preview < 0 or chooser < 0
+    def _keep_windows(self) -> bool:
+        """The preview stays up after the empty room is saved. Q is what quits."""
+        if self.fullscreen:
+            return True
+        still_here = True
+        for title, flags in (
+            (PREVIEW_TITLE, cv2.WINDOW_NORMAL),
+            (CHOOSER_TITLE, cv2.WINDOW_AUTOSIZE),
+        ):
+            fate, misses = window_fate(_window_visible(title), self._window_misses.get(title, 0))
+            self._window_misses[title] = misses
+            if fate == "revive":
+                self._recreate_window(title, flags)
+            elif fate == "quit":
+                still_here = False
+        return still_here
+
+    def _recreate_window(self, title: str, flags: int) -> None:
+        try:
+            cv2.destroyWindow(title)
+        except cv2.error:
+            pass
+        cv2.namedWindow(title, flags)
+        if title == CHOOSER_TITLE:
+            self._mouse_ready = False
+        self._place_again = True
 
     def _select_order(self, order: int, now: float) -> None:
         for index, effect in enumerate(self.effects):
@@ -451,6 +680,8 @@ class App:
         self.active.reset()
         self.active = effect
         self.active.reset()
+        if self.hair is not None:
+            self.hair.reset()
         self._remember(effect_id=effect.id)
         if self.background.capturing and self.capture_reason == "effect" and not effect.replaces_person:
             self.background.cancel()
@@ -460,9 +691,12 @@ class App:
 
     def _load_background(self, now: float) -> None:
         """Start a fresh empty-room capture and its countdown."""
+        if self.background.capturing and now - self.background.started_at < CAPTURE_RESTART_GAP:
+            return
         if self.background.capturing:
             self.background.cancel()
             self._countdown_mark = None
+        self._reset_tracking()
         self.capture_reason = "menu"
         self.background.start(now)
 
@@ -472,7 +706,16 @@ class App:
                 self.capture_reason = "space"
             return
         self.capture_reason = reason
+        self._reset_tracking()
         self.background.start(now)
+
+    def _reset_tracking(self) -> None:
+        if self.active is not None:
+            self.active.reset()
+        if self.hair is not None:
+            self.hair.reset()
+        self._observation = None
+        self._landmarks_at = None
 
     def _switch_camera(self, delta: int) -> None:
         names = list_camera_names()
@@ -489,7 +732,10 @@ class App:
         self.camera.release()
         self.camera = opened
         self.names = names
-        self._landmarks_at = None
+        self.background.cancel()
+        self.background.image = None
+        self.capture_reason = None
+        self._reset_tracking()
         self._remember_camera()
         print(f"Camera: {_camera_label(opened.index, names)}", flush=True)
 

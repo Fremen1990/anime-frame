@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
 
 os.environ.setdefault("GLOG_minloglevel", "2")
@@ -34,6 +35,21 @@ def _pixels(landmarks, width: int, height: int) -> np.ndarray:
     return points
 
 
+def _world(landmarks) -> np.ndarray:
+    return np.asarray([(point.x, point.y, point.z) for point in landmarks], dtype=np.float64)
+
+
+@dataclass
+class LandmarkObservation:
+    timestamp_ms: int
+    hands: list[np.ndarray] = field(default_factory=list)
+    face: np.ndarray | None = None
+    body: np.ndarray | None = None
+    hand_world: list[np.ndarray] = field(default_factory=list)
+    body_world: np.ndarray | None = None
+    body_confidence: np.ndarray | None = None
+
+
 class Landmarks:
     def __init__(self, models: Path) -> None:
         self._hands = HandLandmarker.create_from_options(
@@ -41,6 +57,9 @@ class Landmarks:
                 base_options=_base(models / "hand_landmarker.task"),
                 running_mode=RunningMode.VIDEO,
                 num_hands=2,
+                min_hand_detection_confidence=0.3,
+                min_hand_presence_confidence=0.3,
+                min_tracking_confidence=0.3,
             )
         )
         self._face = FaceLandmarker.create_from_options(
@@ -55,12 +74,15 @@ class Landmarks:
                 base_options=_base(models / "pose_landmarker_lite.task"),
                 running_mode=RunningMode.VIDEO,
                 num_poses=1,
+                min_pose_detection_confidence=0.3,
+                min_pose_presence_confidence=0.3,
+                min_tracking_confidence=0.3,
             )
         )
 
     def detect(
         self, frame_bgr: np.ndarray, timestamp_ms: int
-    ) -> tuple[list[np.ndarray], np.ndarray | None, np.ndarray | None]:
+    ) -> LandmarkObservation:
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         if not rgb.flags["C_CONTIGUOUS"]:
             rgb = np.ascontiguousarray(rgb)
@@ -76,7 +98,18 @@ class Landmarks:
         body = None
         if pose_result.pose_landmarks:
             body = _pixels(pose_result.pose_landmarks[0], width, height)
-        return hands, face, body
+        hand_world = [_world(hand) for hand in (hands_result.hand_world_landmarks or [])]
+        body_world = None
+        confidence = None
+        if pose_result.pose_world_landmarks:
+            body_world = _world(pose_result.pose_world_landmarks[0])
+        if pose_result.pose_landmarks:
+            confidence = np.asarray(
+                [min(float(point.visibility or 0.0), float(point.presence or 0.0))
+                 for point in pose_result.pose_landmarks[0]],
+                dtype=np.float64,
+            )
+        return LandmarkObservation(timestamp_ms, hands, face, body, hand_world, body_world, confidence)
 
     def close(self) -> None:
         self._hands.close()
