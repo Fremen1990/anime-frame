@@ -20,15 +20,15 @@ Install libraries with pip. Download models from the Google URLs in `AGENT.md`. 
 
 ## What this phase must do
 
-One command, `./run`, opens the built-in camera on a clean mirrored preview. A second window, the chooser, lists **Clear**, **Slip**, **Ascend**, and **Lance**. The preview that can go to a meeting has no text on it.
+One command, `./run`, opens the built-in camera on a clean mirrored preview. A second window, the chooser, lists **Clear**, **Goku Instant Transmission**, **Ascend**, and **Lance**. The preview that can go to a meeting has no text on it.
 
 The three effects:
 
-1. **Slip** removes the person. Two straight fingers held together on the forehead. Light streaks, the body collapses into the forehead, the empty room stays, the same pose brings them back.
+1. **Goku Instant Transmission** removes the person. Two straight fingers held together on the forehead. Light streaks, the body collapses into the forehead, the empty room stays, the same pose brings them back. The chooser shows that full name.
 2. **Ascend** leaves the person in frame. Both hands beside the head. A gold-white aura charges, then stays stuck to the moving silhouette until the pose is repeated.
 3. **Lance** leaves the person in frame. Hands cupped at the chest. A core charges, then a beam crosses the frame.
 
-Return fires the active effect without a pose. Escape cancels it. Space recaptures the empty room, and only Slip asks for that room.
+Return fires the active effect without a pose. Escape cancels it. Space recaptures the empty room, and only Goku Instant Transmission asks for that room.
 
 ## Product rules
 
@@ -38,9 +38,9 @@ Return fires the active effect without a pose. Escape cancels it. Space recaptur
 - Mirror the camera before detection and before effects.
 - Person mask: landscape selfie segmenter, person class, threshold 0.5, then a small close so the rim is continuous. Cache the mask’s bounding box.
 - Pose window, shared by every gesture: sample about ten times a second, fire when eight of the last ten samples passed, clear the window after three failures in a row.
-- Slip’s animation is about 0.40 seconds. Ascend’s entrance is about 0.70 seconds and its exit fade is about 0.40 seconds. Lance charges for about 0.80 seconds, the beam travels for about 0.55 seconds, then it fades for about 0.25 seconds.
+- Goku Instant Transmission’s animation is about 0.40 seconds. Ascend’s entrance is about 0.70 seconds and its exit fade is about 0.40 seconds. Lance charges for about 0.80 seconds, the beam travels for about 0.55 seconds, then it fades for about 0.25 seconds.
 - Background capture is about three seconds. Use the median of the frames from the last half-second. Terminal text tells the person to step out, then tells them they can return. The chooser may say “step out” as well. The preview stays free of that text.
-- Sounds are original, synthesized with `wave`, `math`, and `struct`, written under `assets/` on first use, and played with `/usr/bin/afplay` and a fixed argument list. Slip is a short descending noise sweep. Ascend is a rising tone. Lance is a low tone at the start of the charge and a brighter burst when the beam fires. Each file is under half a second.
+- Sounds are original, synthesized with `wave`, `math`, and `struct`, written under `assets/` on first use, and played with `/usr/bin/afplay` and a fixed argument list. Goku Instant Transmission is a short descending noise sweep. Ascend is a rising tone. Lance is a low tone at the start of the charge and a brighter burst when the beam fires. Each file is under half a second. Do not download a clip from the show.
 - `--debug` prints pose decisions to the terminal. It draws nothing on the video.
 - Settings in `.anime-frame.json`: camera index, last effect id. Create the file when either value is first known.
 
@@ -62,7 +62,7 @@ You may split a file if it grows past a single responsibility. Keep these bounda
 
 `anime_frame/effects/base.py` defines the effect type: `id`, `title`, `hint`, `order`, `replaces_person`, `reset()`, and `update(ctx) -> frame`.
 
-`anime_frame/app.py` owns the two windows, the key map in `AGENT.md`, the session, and the virtual camera. The loop is: read, mirror, segment, detect landmarks, update the active effect, show, and optionally send. It does not contain Slip, Ascend, or Lance drawing code.
+`anime_frame/app.py` owns the two windows, the key map in `AGENT.md`, the session, and the virtual camera. The loop is: read, mirror, segment, detect landmarks, update the active effect, show, and optionally send. It does not contain Goku Instant Transmission, Ascend, or Lance drawing code.
 
 `run` is a bash script. It `cd`s to its own directory, creates `.venv` when missing, installs requirements when imports fail, and then dispatches:
 
@@ -71,7 +71,9 @@ You may split a file if it grows past a single responsibility. Keep these bounda
 - `./run test` launches unittest
 - `./run --debug` and `./run teams --debug` pass the debug flag through
 
-## Slip
+## Goku Instant Transmission
+
+The module is `anime_frame/effects/instant_transmission.py`. Its `title` is exactly `Goku Instant Transmission`.
 
 `replaces_person` is true.
 
@@ -83,7 +85,7 @@ The pose is true only when all of these hold on the same hand, on the mirrored f
 - The midpoint of the two tips lies near landmark 10, within about a fifth of the face height.
 - The thumb is ignored.
 
-While the effect is idle and the pose window fills, play the Slip sound, freeze the current person mask and the current person pixels, and play the leave animation. Ignore new poses until the animation finishes, then hold the stored background.
+While the effect is idle and the pose window fills, play its sound, freeze the current person mask and the current person pixels, and play the leave animation. Ignore new poses until the animation finishes, then hold the stored background.
 
 While the person is gone and the pose window fills again, play the sound and the return animation using that same frozen mask and those same pixels, then resume live video.
 
@@ -101,7 +103,7 @@ If the face is missing, the pose is false. Draw only inside the frozen mask’s 
 
 `replaces_person` is false. It never reads the background.
 
-The pose is true when both pose-landmarker wrists are above their shoulders and outside the head width. One raised hand is not enough. Hands on the forehead are not this pose; if the Slip finger test would pass, Ascend does not.
+The pose is true when both pose-landmarker wrists are above their shoulders and outside the head width. One raised hand is not enough. Hands on the forehead are not this pose; if the Goku Instant Transmission finger test would pass, Ascend does not.
 
 On the first fill of the pose window, play the sound and run the entrance: sparks rise around the silhouette and a white-gold flash peaks before 0.7 seconds. After that, every frame draws a rim just outside the current mask, a few pixels wide, gold at the outer edge and white at the body, plus a few rising sparks. Tint pixels inside the mask slightly warmer. The face must stay recognizable.
 
@@ -123,19 +125,19 @@ When the window fills, play the release sound and fire. The beam starts at the c
 
 Add unittest modules that build landmarks in memory.
 
-- Slip fingers together, folded ring and pinky, tips on the forehead: pose accepted.
+- Goku Instant Transmission fingers together, folded ring and pinky, tips on the forehead: pose accepted.
 - The same hand rotated, mirrored, and scaled: still accepted.
 - A spread V, a single index finger, an open palm, and tips down at the chest: rejected.
 - Ascend with both wrists high and wide: accepted. One wrist high: rejected. Wrists at the chest: rejected.
 - Lance with both wrists together at the chest: accepted. Wrists beside the head: rejected. Wrists far apart: rejected.
 - The shared pose window fires once when eight of ten samples pass, and three failures clear it.
-- Slip’s Escape path returns a gone state to live. Return can start Slip without a pose.
-- Registry returns Clear, Slip, Ascend, and Lance in menu order.
+- Goku Instant Transmission’s Escape path returns a gone state to live. Return can start it without a pose.
+- Registry returns Clear, Goku Instant Transmission, Ascend, and Lance in menu order.
 
 Run `./run test`. Do not open the camera in tests.
 
 ## After the code runs
 
-Update `ROADMAP.md` checkboxes for the items you actually finished. Write `README.md` with install-free daily use: `./run`, `./run teams`, the four keys, the three poses, the step-out line for Slip, and the macOS camera permission pane. Mention that Teams audio does not carry the effect sounds, because the virtual camera is video only.
+Update `ROADMAP.md` checkboxes for the items you actually finished. Write `README.md` with install-free daily use: `./run`, `./run teams`, the four keys, the three poses, the step-out line for Goku Instant Transmission, and the macOS camera permission pane. Mention that Teams audio does not carry the effect sounds, because the virtual camera is video only.
 
 Do not build the `.app` in this phase. Do not add Echo, Ash, Statue, Gate, Shatter, Tide, or Crown yet. Their behavior is already specified in `ROADMAP.md` for a later pass.

@@ -2,13 +2,13 @@
 
 Anime Frame is a new local webcam-effects app. It puts anime-style animations on your real camera. Video stays on this Mac. The preview and the virtual camera show the picture and the effect only.
 
-Read `PROMPT.md` and `ROADMAP.md` before writing code. Implement the current unchecked phase in `ROADMAP.md`, then stop. Check a box only after that item runs and its tests pass.
+Read `PROMPT.md` and `ROADMAP.md` before writing code. Implement the current unchecked phase in `ROADMAP.md`, then stop. Check a box only after that item runs and its tests pass. `PROMPT.md` still names Ascend and Lance. Those two were removed. Do not put them back.
 
 ## Hard rules
 
 - Build everything in this folder. Do not open, copy, rename, or adapt files from `~/projects/vanish_webcam` or any VanishCam checkout.
-- Do not add character art, anime frames, scanned sprites, or downloaded audio. Draw effects with OpenCV and NumPy. Synthesize sounds with the Python standard library.
-- The product name on screen is Anime Frame. Effect names are the effect names in `ROADMAP.md`. Do not put a show title, a character, or a signature-move name in the UI, window titles, file names, or log lines.
+- Do not add character art, anime frames, or scanned sprites. Instant Transmission plays the local `assets/instant_transmission.mp3`. Do not add other downloaded audio. Draw effects with OpenCV and NumPy. Synthesize a fallback sound with the Python standard library when that file is missing.
+- The product name on screen is Anime Frame. Effect names are the names in `ROADMAP.md`. The forehead effect is titled **Goku Instant Transmission**. Do not add a show logo or character art.
 - Do not record video, upload frames, or open a microphone. Do not add `NSMicrophoneUsageDescription`.
 - Play audio only through `/usr/bin/afplay` with a fixed argument list. Never use `shell=True`.
 - Outgoing video has no text, countdown, menu, or debug overlay. Diagnostics go to the terminal.
@@ -34,9 +34,7 @@ anime-frame/
     effects/
       base.py
       clear.py
-      slip.py
-      ascend.py
-      lance.py
+      instant_transmission.py
   tests/
   models/             # downloaded, gitignored
 ```
@@ -66,12 +64,10 @@ These poses must not overlap:
 
 | Effect | Pose |
 | --- | --- |
-| Slip | Index and middle fingers extended and adjacent, ring and pinky folded, tips held on the forehead |
-| Ascend | Both wrists above the shoulders and outside the head |
-| Lance | Both wrists close together in front of the chest, fingers extended |
+| Goku Instant Transmission | Index and middle fingers extended and adjacent, ring and pinky folded, tips held on the forehead |
 | Clear | No pose |
 
-A spread V, a single pointing finger, and a finger at the temple do not fire Slip. Hands raised beside the head do not fire Lance. Cupped hands at the chest do not fire Ascend.
+A spread V, a single pointing finger, and a finger at the temple do not fire Goku Instant Transmission.
 
 ## Keys
 
@@ -80,10 +76,10 @@ The chooser window receives these keys. The preview window receives the same set
 | Key | Action |
 | --- | --- |
 | `0` | Clear |
-| `1` `2` `3` | Slip, Ascend, Lance, in menu order |
+| `1` | Goku Instant Transmission |
 | Return | Fire the active effect without the pose |
 | Escape | Cancel the active effect and return to the live picture |
-| Space | Capture the background again |
+| Space | Capture the background again. The Load background row does the same and always restarts the countdown |
 | `[` `]` | Previous and next camera, then remember it |
 | `F` | Fullscreen the preview |
 | `Q` | Quit and release the camera |
@@ -133,9 +129,11 @@ The picture is mirrored in the preview and on the virtual camera. Detection runs
 
 ## When an effect needs the empty room
 
-Clear, Ascend, and Lance start immediately. Slip, and any later effect marked “replaces the person”, waits for a background.
+Clear starts immediately. Goku Instant Transmission, and any later effect marked “replaces the person”, waits for a background.
 
-Capture lasts about three seconds. Tell the person, in the terminal, to step out of the chair. Keep a median of the frames from the last half-second. Then tell them they can sit down. Space repeats this. A missing background never blocks the effects that only draw on top of the live person.
+Capture lasts 3 seconds. The chooser counts down 3, 2, 1, and the terminal prints the same second as it changes. The preview and the virtual camera stay free of that text. Keep a median of the frames from the last half-second. Then tell them they can sit down. The Load background row and Space both repeat this, including when a room is already stored. A missing background never blocks an effect that only draws on top of the live person.
+
+The Instant Transmission card may show `assets/instant_transmission_guide.png`. That still stays on this Mac, is gitignored, and is never drawn on the preview.
 
 ## Adding an effect
 
@@ -143,7 +141,7 @@ Capture lasts about three seconds. Tell the person, in the terminal, to step out
 2. Keep pose tests and timing tests in `tests/` with synthetic points. No camera.
 3. Add the row to `ROADMAP.md` if it is not there yet.
 4. Give it the next digit key only when the menu still has room; past nine, the mouse and the on-screen chooser are enough.
-5. Draw inside the person bounds plus a small margin when the effect composites a mask. Keep the full frame for lights that must travel to the frame edge, such as Lance.
+5. Draw inside the person bounds plus a small margin when the effect composites a mask. Use the full frame only when a light has to reach the frame edge.
 
 ## Done
 

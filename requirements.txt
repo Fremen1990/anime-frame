@@ -1,0 +1,5 @@
+# MediaPipe 0.10.32 and newer depend on opencv-contrib-python, which this project does not use.
+mediapipe>=0.10.31,<0.10.32
+opencv-python>=4.11,<4.15
+numpy>=1.26,<2.6
+pyvirtualcam>=0.14,<0.16

@@ -1,0 +1,14 @@
+.venv/
+models/
+.anime-frame.json
+__pycache__/
+build/
+dist/
+*.pyc
+.DS_Store
+assets/*.wav
+assets/*.mp3
+assets/*.png
+assets/*.jpg
+assets/*.jpeg
+assets/*.webp

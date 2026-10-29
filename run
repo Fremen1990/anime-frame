@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(cd "$(dirname "$0")" && pwd)"
+
+if [[ ! -d .venv ]]; then
+  PY=""
+  for candidate in python3.13 python3.12 python3.11 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      if "$candidate" -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] <= (3, 13) else 1)'; then
+        PY="$candidate"
+        break
+      fi
+    fi
+  done
+  if [[ -z "$PY" ]]; then
+    echo "Anime Frame needs Python 3.11, 3.12, or 3.13." >&2
+    exit 1
+  fi
+  "$PY" -m venv .venv
+fi
+
+# shellcheck disable=SC1091
+source .venv/bin/activate
+export GLOG_minloglevel=2
+export TF_CPP_MIN_LOG_LEVEL=2
+
+if ! python -c "import mediapipe, cv2, numpy, pyvirtualcam" >/dev/null 2>&1; then
+  python -m pip install -r requirements.txt
+fi
+
+if [[ "${1:-}" == "test" ]]; then
+  shift
+  exec python -u -m unittest discover -s tests "$@"
+fi
+
+if [[ "${1:-}" == "teams" ]]; then
+  shift
+  exec python -u -m anime_frame.app --teams "$@"
+fi
+
+exec python -u -m anime_frame.app "$@"
