@@ -26,6 +26,7 @@ class FrameContext:
     pose_confidence: np.ndarray | None = None
     hair_mask: np.ndarray | None = None
     hair_mask_at: float | None = None
+    hair_reference_anchor: np.ndarray | None = None
 
 
 class Effect(ABC):

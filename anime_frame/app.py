@@ -250,7 +250,7 @@ def row_at(x: int, y: int, count: int) -> int | None:
     return None
 
 
-def render_chooser(effects, active_id: str, status: str, countdown: int | None = None) -> np.ndarray:
+def render_chooser(effects, active_id: str, status: str, countdown: int | None = None, audio_warning: str = "") -> np.ndarray:
     image = np.full((CHOOSER_HEIGHT, CHOOSER_WIDTH, 3), (32, 32, 36), np.uint8)
     cv2.putText(
         image,
@@ -262,6 +262,8 @@ def render_chooser(effects, active_id: str, status: str, countdown: int | None =
         2,
         cv2.LINE_AA,
     )
+    if audio_warning:
+        put_label(image, audio_warning, (456, 52), 0.43, (150, 195, 240))
     for index, effect in enumerate(effects):
         y = ROW_TOP + index * ROW_HEIGHT
         selected = effect.id == active_id
@@ -374,6 +376,7 @@ class App:
     def run(self) -> int:
         ensure_models(ROOT / "models")
         audio.ensure_all(ROOT / "assets")
+        audio.initialize(ROOT / "assets")
         self.effects = load_effects()
         if not self.effects:
             print("No effects were found.")
@@ -395,6 +398,7 @@ class App:
     def close(self) -> None:
         if self.active is not None:
             self.active.reset()
+        audio.shutdown()
         if self.virtual is not None:
             try:
                 self.virtual.close()
@@ -564,7 +568,7 @@ class App:
                     self._apply_failed = False
                 status = self.active.status
             cv2.imshow(PREVIEW_TITLE, output)
-            cv2.imshow(CHOOSER_TITLE, render_chooser(self.effects, self.active.id, status, countdown))
+            cv2.imshow(CHOOSER_TITLE, render_chooser(self.effects, self.active.id, status, countdown, audio.warning(self.active.id)))
             if self._place_again:
                 self._place_windows()
                 self._place_again = False
@@ -577,16 +581,16 @@ class App:
     def _apply(self, frame: np.ndarray, now: float, command: str | None) -> np.ndarray:
         timestamp = self._clock()
         mask = self.segmenter.segment(frame, timestamp)
-        # Gestures are sampled about ten times a second. The landmark models run
-        # on that cadence and the latest points are reused in between, which keeps
-        # a full session around 30 fps on this Mac.
-        if self._landmarks_at is None or now - self._landmarks_at >= 0.09:
-            self._observation = self.landmarks.detect(frame, timestamp)
-            self._landmarks_at = now
+        # Gesture models run on their own thread, about ten times a second.
+        # This frame reuses the latest finished observation.
+        observation, observed_at = self.landmarks.sample(frame, timestamp, now)
+        if observed_at is not None:
+            self._observation = observation
+            self._landmarks_at = observed_at
         observation = self._observation
         hair_mask, hair_mask_at = (None, None)
         if self.active.needs_hair_mask and self.hair is not None:
-            hair_mask, hair_mask_at = self.hair.sample(frame, timestamp, now)
+            hair_mask, hair_mask_at = self.hair.sample(frame, timestamp, now, observation.face if observation is not None else None)
         keys = set()
         if command in {"return", "escape"}:
             keys.add(command)
@@ -605,6 +609,7 @@ class App:
             landmark_timestamp_ms=observation.timestamp_ms if observation is not None else None,
             hair_mask=hair_mask,
             hair_mask_at=hair_mask_at,
+            hair_reference_anchor=self.hair.reference_anchor if self.hair is not None and hair_mask is not None else None,
             keys=keys,
             debug=self.debug,
         )
@@ -714,6 +719,8 @@ class App:
             self.active.reset()
         if self.hair is not None:
             self.hair.reset()
+        if self.landmarks is not None:
+            self.landmarks.reset()
         self._observation = None
         self._landmarks_at = None
 

@@ -10,7 +10,7 @@ Read `PROMPT.md` and `ROADMAP.md` before writing code. Implement the current unc
 - Do not add character art, anime frames, or scanned sprites. Draw effects with OpenCV and NumPy. Instant Transmission plays the local `assets/instant_transmission.mp3`, with a synthesized fallback when missing. For Super Saiyan, Kamehameha, and Kikōhō, use the user's selected Dragon Ball clips; present preview links and wait for their selection before installing them. Do not substitute synthesized sounds for those three effects.
 - The product name on screen is Anime Frame. Effect names are the names in `ROADMAP.md`. The forehead effect is titled **Goku Instant Transmission**. Do not add a show logo or character art.
 - Do not record video, upload frames, or open a microphone. Do not add `NSMicrophoneUsageDescription`.
-- Play audio only through `/usr/bin/afplay` with a fixed argument list. Never use `shell=True`.
+- Instant Transmission and Kikōhō use `/usr/bin/afplay` with fixed arguments. Kamehameha and Super Saiyan use a persistent `sounddevice.OutputStream` (output only; never open an input stream). Prepare selected recordings with native `/usr/bin/afconvert`, fixed arguments, before camera processing. Never use `shell=True`.
 - Outgoing video has no text, countdown, menu, or debug overlay. Diagnostics go to the terminal.
 - Docker is out of scope. The camera and the OBS virtual camera are macOS devices, and a Linux container cannot use them.
 
@@ -66,21 +66,25 @@ Each `update` call receives:
 
 ## Gestures
 
-Sample distinct observations about ten times a second. The default gesture window accepts eight of ten samples and clears after three misses. Kamehameha uses that window to start, four samples to confirm the side stage, and two consecutive samples for its final push. Kikōhō uses three consecutive samples for a direct attack, with no charge stage. Effects that remove the person also need a stored background.
+Sample distinct observations about ten times a second. Instant Transmission and Super Saiyan use eight of ten samples. Kamehameha starts with four consecutive side-pose samples, grows its orb for 0.7 seconds while the side pose remains valid, then accepts two consecutive forward-push observations. Kikōhō uses three consecutive samples for a direct attack.
 
 | Effect | Pose |
 | --- | --- |
 | Goku Instant Transmission | Index and middle fingers extended and adjacent, ring and pinky folded, tips held on the forehead |
-| Super Saiyan | Both fists apart beside the shoulders. It stays on after the hands drop. The same pose, or Escape, fades it. Flames and lightning surround the silhouette |
-| Kamehameha | Hands together toward the camera, then cupped beside either side of the torso, then pushed toward the camera again. All three stages are required |
-| Kikōhō | Both wrists together at chest height, aimed toward the camera. A single four-second square blast with the selected sound. No charge or finger-triangle requirement |
+| Super Saiyan | Both fists apart beside the shoulders. A 1.7-second entrance reveals textured gold hair and flowing flames. It stays active after the hands drop; repeating the pose or Escape fades it over 0.4 seconds |
+| Kamehameha | Cup both hands beside either side of the torso, keep them there while the orb grows, then push both hands toward the camera. No initial forward gesture |
+| Kikōhō | Both wrists together at chest height, aimed toward the camera. One four-second square blast; no charging or finger-triangle requirement |
 | Clear | No pose |
 
-Kamehameha's initial forward gesture starts Charge. Moving to the side switches immediately to the Hold loop and captures the shoulder-relative depth baseline. The final forward movement, corroborated by elbow extension, stops Hold and plays Fire. A starting pose already aimed forward cannot fire without visiting the side stage. Side detection uses shoulder-relative position and a visible cupped hand near a body wrist; the other hand mesh may be occluded. Keep hand-local depth out of camera-distance comparisons.
+Kamehameha uses a shoulder-relative world-depth baseline and elbow extension. Whole-body leaning, one-handed movement, replayed observations, and early pushes must not fire. After charge completion, wait without a duration limit while tracking stays usable. Tracking loss for 300 ms fades out a gesture charge over 120 ms; Escape restores video immediately with a 20 ms audio ramp. Return starts a keyboard charge, which works without tracking; a second Return fires once ready. Repeated triggers during a blast do not restart it. Pose release is required before rearming.
 
-Kamehameha waits without a duration limit while usable depth tracking remains available. About 300 ms of missing, stale, low-confidence or replayed tracking cancels gesture-driven waiting. Keyboard mode works without a person: Return advances start, hold, fire, one stage per press, with no automatic firing. Physical stages may also advance a keyboard start. Kikōhō needs just one Return and ignores further triggers until its selected 4.023-second clip and visual tail finish. Both effects require pose release before another gesture trigger. Escape, effect/camera changes, recapture, and shutdown stop playback and clear state.
+The camera loop has no effect-specific behavior. Continuous audio is initialized once before processing and closed on exit. Decode selected MP3s into a hash/version-keyed, ignored PCM cache. Prepare bounded-gain, linear crossfades offline; callbacks only copy/mix preloaded samples using bounded work buffers. Generation handles prevent obsolete release/cancel commands from affecting new playback. Effects use estimated audible playhead/envelope snapshots, with monotonic fallback when output is unavailable. Missing audio leaves video usable with a chooser warning, never a silent return to abrupt process-based loops.
 
-Super Saiyan plays its recorded opening once and repeats only a prepared steady tail. `audio_prepare.py` derives the local start/sustain WAVs from the selected MP3; it needs ffmpeg only during preparation. Missing prepared beds fall back to the original recording once, never a loop of the intro. Other missing selected clips remain silent, and old synthesized WAVs are ignored. Instant Transmission still has its generated fallback. Guidance and stage status belong in the chooser only; use macron-aware labels for Kikōhō.
+Kamehameha plays the selected Charge, then keeps looping a later slice of that same Charge. It does not play the Hold recording. The push crossfades into a shortened Release. Charge targets -18 dBFS RMS and Release -16 dBFS, with peak headroom. The charge loop uses a 180 ms crossfade and release uses 80 ms. The orb retains its origin, size and brightness through the blast handoff; a restrained afterglow lasts through the shortened release.
+
+Super Saiyan plays its selected opening once, then loops the 1.70–5.45-second steady section in the same stream. Hair results carry a submission-time head anchor. Align masks before temporal smoothing, color the real hair gold without changing its shape, protect the face and beard, and fade stale treatment from 150 to 250 ms. Hair absence does not disable the silhouette aura. Camera/effect switches, recapture and shutdown clear audio and tracking caches.
+
+All guidance belongs in the chooser. Use macron-aware labels for Kikōhō. Instant Transmission retains its generated fallback; missing selected Dragon Ball recordings never get synthesized replacements.
 
 ## Keys
 
@@ -93,7 +97,7 @@ The chooser window receives these keys. The preview window receives the same set
 | `2` | Super Saiyan |
 | `3` | Kamehameha |
 | `4` | Kikōhō |
-| Return | Kamehameha: start, hold, fire, one press per stage. Kikōhō: fire once. Other effects: trigger |
+| Return | Kamehameha: start charging; press again when ready to fire. Kikōhō: fire once. Other effects: trigger |
 | Escape | Cancel the active effect and return to the live picture |
 | Space | Capture the background again. The Load background row does the same and always restarts the countdown |
 | `[` `]` | Previous and next camera, then remember it |

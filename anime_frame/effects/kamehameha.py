@@ -1,4 +1,4 @@
-"""Forward to start, cup at the side to hold, forward again to fire."""
+"""Cup at your side to charge; push toward the camera to fire."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from anime_frame.pose import kamehameha_pose
 class Kamehameha(AttackEffect):
     id = "kamehameha"
     title = "Kamehameha"
-    hint = "Forward, cup at your side, then forward to fire"
+    hint = "Cup hands at your side, then push forward"
     order = 3
     core_color = (255, 245, 165)
     charge_sound = "kamehameha_charge"

@@ -177,7 +177,10 @@ def kamehameha_pose(hands: list[np.ndarray], body: np.ndarray | None, confidence
     hip_y = (points[23, 1] + points[24, 1]) / 2.0
     if not (shoulder_y + 0.08 * scale < center[1] < hip_y + 0.45 * scale):
         return False
+    # Cupped hands often hide both meshes. Wrist position is enough; a visible fist does not count.
     detected = list(_hands(hands))
+    if not detected:
+        return True
     return any(not _fist(hand) and min(_distance(hand[0], wrist) for wrist in wrists) < 0.8 * scale for hand in detected)
 
 
@@ -274,7 +277,7 @@ def aimed_at_camera(world: np.ndarray | None, confidence: np.ndarray | None = No
     points = np.asarray(world)
     for shoulder, elbow, wrist in ((11, 13, 15), (12, 14, 16)):
         wrist_z = float(points[wrist, 2])
-        if wrist_z >= float(points[elbow, 2]) - 0.04 or wrist_z >= float(points[shoulder, 2]) - 0.08:
+        if wrist_z >= float(points[elbow, 2]) - 0.025 or wrist_z >= float(points[shoulder, 2]) - 0.05:
             return False
     return True
 
@@ -285,7 +288,7 @@ def pushed_forward(baseline: ForwardBaseline, world: np.ndarray | None, confiden
         return False
     depth = [start - end for start, end in zip(baseline.relative_depth, current.relative_depth)]
     opening = [end - start for start, end in zip(baseline.elbow_angles, current.elbow_angles)]
-    return min(depth) > 0.17 * baseline.shoulder_width and sum(opening) / 2.0 > 10.0
+    return min(depth) > 0.09 * baseline.shoulder_width and sum(opening) / 2.0 > 6.0
 
 
 def report_pose(debug: bool, effect_id: str, pose_ok: bool, window: PoseWindow) -> None:
@@ -329,13 +332,15 @@ class PoseWindow:
         self.fired = False
         self.cleared = False
         self.sampled = False
-        if observation_id is not None:
-            if observation_id == self._last_observation_id:
-                return
-            self._last_observation_id = observation_id
+        if observation_id is not None and observation_id == self._last_observation_id:
+            return
         # 0.1 is not exact in binary, so allow a tiny early sample.
+        # A new observation that arrives early is kept for the next interval
+        # instead of being discarded.
         if self._last_time is not None and (now - self._last_time) < SAMPLE_INTERVAL - 1e-4:
             return
+        if observation_id is not None:
+            self._last_observation_id = observation_id
         self._last_time = now
         self.sampled = True
         if self._wait_release:

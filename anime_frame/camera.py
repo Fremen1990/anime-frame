@@ -10,13 +10,15 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
+import time
 from ctypes import c_char_p, c_ulong, c_void_p, cdll
 
 import cv2
 import numpy as np
 
-# Drop this to (960, 540) if a full session cannot hold about 20 fps.
-CAPTURE_SIZE = (1280, 720)
+# Super Saiyan at 1280×720 held about 15 fps on this Mac. 960×540 holds above 20.
+CAPTURE_SIZE = (960, 540)
 FRAME_WIDTH, FRAME_HEIGHT = CAPTURE_SIZE
 
 
@@ -208,17 +210,73 @@ def open_capture(index: int):
 
 
 class Camera:
+    """Reads on a side thread so the preview can keep the newest frame without waiting out the exposure."""
+
     def __init__(self, index: int) -> None:
         self.index = int(index)
         self.cap = open_capture(self.index)
-
-    def read(self) -> np.ndarray:
-        ok, frame = self.cap.read()
-        if not ok or frame is None:
+        self._lock = threading.Lock()
+        self._latest: np.ndarray | None = None
+        self._seq = 0
+        self._seen = 0
+        self._failed = False
+        self._ready = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._pump, name="anime-camera", daemon=True)
+        self._thread.start()
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            with self._lock:
+                ready = self._latest is not None or self._failed
+            if ready:
+                break
+            time.sleep(0.01)
+        if self._latest is None:
+            self.release()
             raise CameraError("The camera stopped sending frames.")
-        return frame.copy()
 
-    def release(self) -> None:
-        if self.cap is not None:
+    def _pump(self) -> None:
+        try:
+            while not self._stop.is_set():
+                ok, frame = self.cap.read()
+                if not ok or frame is None:
+                    with self._lock:
+                        self._failed = True
+                    self._ready.set()
+                    return
+                snapshot = frame.copy()
+                with self._lock:
+                    self._latest = snapshot
+                    self._seq += 1
+                self._ready.set()
+        finally:
             self.cap.release()
             self.cap = None
+
+    def read(self) -> np.ndarray:
+        """Return the next frame the camera produced. Skips any that arrived while the last one was on screen."""
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            with self._lock:
+                failed = self._failed
+                if self._latest is not None and self._seq != self._seen:
+                    self._seen = self._seq
+                    frame = self._latest
+                else:
+                    frame = None
+            if frame is not None:
+                return frame.copy()
+            if failed:
+                raise CameraError("The camera stopped sending frames.")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not self._ready.wait(remaining):
+                break
+            self._ready.clear()
+        raise CameraError("The camera stopped sending frames.")
+
+    def release(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+            self._thread = None

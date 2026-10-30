@@ -34,7 +34,7 @@ Teams does not carry the effect sounds. The virtual camera is video only. The so
 
 | Key | Action |
 | --- | --- |
-| Return | Kamehameha: start → hold → fire, one press per stage. Kikōhō: fire once. Other effects: trigger |
+| Return | Kamehameha: start charging, then press again when ready to fire. Kikōhō: fire once. Other effects: trigger |
 | Escape | Cancel the active effect and return to the live picture |
 | Space | Capture the empty room again |
 | `[` `]` | Previous and next camera |
@@ -43,32 +43,32 @@ Teams does not carry the effect sounds. The virtual camera is video only. The so
 
 Click a row in the `Anime Frame` window, or press its number. The selected row shows how to invoke that effect. Goku Instant Transmission uses the local pose still. **Load background** starts a fresh 3-second capture and the countdown, even when a room is already stored. The meeting picture is the other window, `Anime Frame Preview`. That window has no text and no still on it.
 
-On this Mac a Super Saiyan session held about 21 frames a second at 1280×720. Recheck this after effect changes. If sustained performance falls below 20 fps, use 960×540 capture in the camera settings constants.
+Capture is 960×540. On this Mac, Super Saiyan with the hair mask, flames, and both windows held about 15 frames a second at 1280×720 and about 28 at 960×540.
 
 ## The poses
 
-The chooser shows the gesture and the current attack stage. Instant Transmission, Super Saiyan, and Kamehameha's opening pose take about a second to confirm. Kikōhō uses a short confirmation of about 0.2 seconds and has no charge stage.
+The chooser shows the gesture and current attack stage. Instant Transmission and Super Saiyan confirm their gesture in about a second. Kamehameha confirms cupped hands in about 0.3 seconds, then grows its orb for 0.7 seconds. Kikōhō has a short 0.2-second confirmation and no charge stage.
 
 | Effect | Pose |
 | --- | --- |
 | Goku Instant Transmission | Index and middle fingers together on the forehead, ring and pinky folded. You leave. The same pose brings you back. |
-| Super Saiyan | Both fists beside the shoulders. Gold hair, flames, and lightning stay after you lower your hands. The same pose, or Escape, turns it off. |
-| Kamehameha | **Forward → side → forward.** Hold both hands together toward the camera to start. Pull them back and cup them beside either side of your torso to establish the charged hold. Push both hands toward the camera again to fire. |
-| Kikōhō | Both hands together at chest height, aimed toward the camera. Fires once immediately after the short gesture confirmation. The selected sound and fading square blast last about four seconds. Lower your hands before another attack. |
+| Super Saiyan | Both fists beside the shoulders. The selected sound accompanies a 1.7-second transformation: your own hair turns gold, flames flow upward, and sparks rise around the silhouette. Lower your hands and it stays active. Repeat the pose or press Escape to fade it out. |
+| Kamehameha | **Cup at your side → push forward.** Cup both hands beside either side of the torso and keep them there while the orb grows. Once ready, push both hands toward the camera. The orb follows your hands into the blast and fades with its sound. |
+| Kikōhō | Hands together at chest height, aimed toward the camera. One gesture triggers the complete four-second square blast. Lower your hands before another attack. |
 
-A spread V, one finger, or a point at the temple does not fire Goku Instant Transmission. Kamehameha cannot start from the side pose or skip that stage. The side pose takes about 0.3 seconds to confirm; the final push needs two distinct forward observations. It stays charged without a duration limit while tracking remains available. Raising the hands, moving only one hand, or leaning your whole body forward does not release the blast. About 300 ms without usable depth tracking cancels a gesture-driven charge. Escape cancels immediately.
+Kamehameha waits indefinitely once charged, while tracking stays valid. An early push during buildup cancels instead of firing later. Raising your hands, leaning forward or moving only one hand does not release it. About 300 ms without usable tracking cancels a gesture charge. Escape restores live video immediately. The chooser shows the current instructions; the preview and virtual camera stay free of text.
 
-Return works without tracking: for Kamehameha, press once to start, again to enter the charged hold, and again to fire. Keyboard-started stages wait until you advance them; they never fire on a timer. You can also complete the physical stages after a keyboard start. For Kikōhō, one Return plays the whole attack; presses during playback do not restart it.
+Return works without tracking: press once to charge Kamehameha, wait for the orb to grow, then press again to fire. It never fires on a timer. Kikōhō needs one Return; presses during playback do not restart it.
 
 ## Sounds
 
-Super Saiyan, Kamehameha, and Kikōhō use selected local Dragon Ball recordings. Old synthesized WAVs are ignored. Instant Transmission keeps its supplied sound and generated fallback.
+The selected Dragon Ball recordings remain local and gitignored. Their links and provenance are in [assets/SOURCES.md](assets/SOURCES.md). No audio is downloaded during sessions.
 
-The selected clips and their preview links are listed in [assets/SOURCES.md](assets/SOURCES.md). Super Saiyan plays its transformation opening once, then repeats only a crossfaded steady section of that same recording. Kamehameha's forward start plays Charge; the side pose switches to Hold; the final forward push switches to Fire. Kikōhō plays the full Shin Kikōhō recording once with its attack. Escape, switching effects, and quitting stop playback.
+Kamehameha and Super Saiyan now use a persistent, **output-only** audio stream. Kamehameha plays Charge and then continues that same charge; the separate Hold clip is not used. A push crossfades into a shortened Fire. Super Saiyan plays its opening once and loops only the steady aura section without restarting an audio process. Its visual entrance follows the audio envelope. Deactivation fades audio with the effect.
 
-The two prepared Saiyan WAVs are already installed locally. To rebuild them from `assets/super_saiyan_aura.mp3`, run `.venv/bin/python -m anime_frame.audio_prepare` with `ffmpeg` available. Preparation is separate from camera sessions. If the prepared files are absent, the original aura clip plays once, without looping its opening.
+The app uses macOS `afconvert` to prepare a hash-keyed PCM cache before opening the camera. To prepare or validate it separately, run `.venv/bin/python -m anime_frame.audio_prepare`. There is no ffmpeg requirement. Original MP3s and older prepared WAVs are preserved; the older Saiyan WAV beds are no longer used for playback.
 
-The audio files stay local and are gitignored. The app never downloads audio during a session.
+Missing recordings or an unavailable output device leave visuals usable and show a chooser warning. Instant Transmission and Kikōhō keep their one-shot playback. Instant Transmission alone retains its synthesized fallback. The app never opens a microphone, and OBS Virtual Camera carries video only.
 
 ## Step out
 

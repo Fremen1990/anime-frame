@@ -1,8 +1,8 @@
-"""Playback through afplay.
+"""Local one-shot afplay and continuous output-only PCM playback.
 
 Instant Transmission falls back to a short generated wav. Every other effect
-uses selected local recordings. The two prepared Saiyan WAVs contain only
-edits of its recording. Files are never downloaded by the app.
+uses selected local recordings. Continuous effects use prepared PCM in an output-only stream. Files are
+never downloaded by the app.
 """
 
 from __future__ import annotations
@@ -119,22 +119,6 @@ def sound_path(name: str, root: Path | None = None) -> Path | None:
     return ensure(name, root)
 
 
-def start_saiyan() -> None:
-    """The transformation opening happens once; only its steady tail repeats."""
-    stop_saiyan()
-    if all(sound_path(name) is not None for name in PREPARED_RECORDINGS):
-        play("super_saiyan_start")
-        loop("super_saiyan_sustain", after="super_saiyan_start")
-    else:
-        # A missing prepared bed must never resurrect the repeating intro.
-        play("super_saiyan_aura")
-
-
-def stop_saiyan() -> None:
-    for name in ("super_saiyan_sustain", "super_saiyan_start", "super_saiyan_aura", "super_saiyan"):
-        stop(name)
-
-
 def _afplay(destination: Path) -> subprocess.Popen[bytes]:
     return subprocess.Popen(["/usr/bin/afplay", str(destination)])
 
@@ -218,3 +202,64 @@ def stop(name: str) -> None:
     thread = state.thread
     if thread is not None and thread is not threading.current_thread():
         thread.join(timeout=0.6)
+
+
+_engine = None
+_cue_errors: dict[str, str] = {}
+
+
+def initialize(root: Path | None = None, stream_factory=None) -> None:
+    """Prepare and open once before camera processing; failure leaves video usable."""
+    global _engine, _cue_errors
+    shutdown()
+    from anime_frame.audio_prepare import prepare_cues
+    from anime_frame.pcm_audio import Engine
+    cues, _cue_errors = prepare_cues(root or default_assets())
+    _engine = Engine(cues, stream_factory)
+    if cues:
+        _engine.open()
+    for name, error in _cue_errors.items():
+        print(f"Audio unavailable for {name}: {error}")
+    if _engine.error:
+        print(f"Continuous audio unavailable: {_engine.error}")
+
+
+def start_cue(name: str):
+    return _engine.start(name) if _engine is not None else None
+
+
+def release_cue(handle) -> None:
+    if _engine is not None:
+        _engine.release(handle)
+
+
+def fade_stop(handle, seconds: float = 0.02) -> None:
+    if _engine is not None:
+        _engine.stop(handle, seconds)
+
+
+def playback_snapshot(handle):
+    return _engine.snapshot(handle) if _engine is not None else None
+
+
+def release_duration(name: str, fallback: float) -> float:
+    if _engine is not None and name in _engine.cues:
+        return _engine.cues[name].release_seconds or fallback
+    return fallback
+
+
+def warning(name: str) -> str:
+    if name not in ('kamehameha', 'super_saiyan'):
+        return ''
+    if name in _cue_errors or _engine is None or _engine.stream is None or not _engine.stream.active:
+        return 'Audio unavailable; visuals continue'
+    return ''
+
+
+def shutdown() -> None:
+    global _engine
+    if _engine is not None:
+        _engine.close()
+        _engine = None
+    for name in list(_loops) + list(_oneshots):
+        stop(name)

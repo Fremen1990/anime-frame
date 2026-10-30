@@ -1,5 +1,4 @@
-"""Gold hair and a live, persistent silhouette aura."""
-
+"""Continuous golden flames and a textured, head-anchored hair transformation."""
 from __future__ import annotations
 
 import cv2
@@ -7,55 +6,93 @@ import numpy as np
 
 from anime_frame import audio
 from anime_frame.effects.base import Effect, FrameContext
+from anime_frame.hair_geometry import head_anchor, head_bounds, warp_mask
 from anime_frame.pose import PoseWindow, report_pose, super_saiyan_pose
-from anime_frame.vfx import feather, screen_blend, silhouette_aura
+from anime_frame.vfx import feather, silhouette_aura
 
-POWER_UP = 0.7
+POWER_UP = 1.7
 POWER_DOWN = 0.4
 
 
-def golden_hair(frame: np.ndarray, hair_mask: np.ndarray | None, face: np.ndarray | None, strength: float) -> np.ndarray:
-    """Gold on the hair only, with a soft upward fringe. Skin below the forehead stays as it is."""
-    if hair_mask is None or face is None or len(face) <= 152 or strength <= 0:
+def golden_hair(frame, hair_mask, face, strength, *, bounds=None):
+    anchor = head_anchor(face)
+    if hair_mask is None or anchor is None or strength <= 0:
         return frame
-    height, width = frame.shape[:2]
-    face_height = float(np.linalg.norm(face[10] - face[152]))
-    if face_height <= 1:
+    left, top, right, bottom = bounds or head_bounds(anchor, frame.shape)
+    if right <= left or bottom <= top:
         return frame
-    y_limit = int(np.clip(face[10, 1], 0, height))
-    y0 = max(0, int(face[10, 1] - 0.9 * face_height))
-    x0 = max(0, int(face[10, 0] - 0.9 * face_height))
-    x1 = min(width, int(face[10, 0] + 0.9 * face_height))
-    if y_limit <= y0 or x1 <= x0:
+    local = frame[top:bottom, left:right]
+    alpha = hair_mask if bounds is not None else hair_mask[top:bottom, left:right]
+    alpha = np.clip(alpha, 0, 1).astype(np.float32)
+    forehead = anchor[0] - (left, top)
+    height = float(np.linalg.norm(anchor[1] - anchor[0]))
+    down = (anchor[1] - anchor[0]) / height
+    ys, xs = np.mgrid[:bottom-top, :right-left].astype(np.float32)
+    vertical = (xs-forehead[0]) * down[0] + (ys-forehead[1]) * down[1]
+    # Only the crown above the forehead is eligible. This also excludes skin,
+    # facial hair and the facial oval, independent of imperfect segmentation.
+    protection = np.clip(-vertical / max(2.0, height * 0.035), 0, 1)
+    alpha *= protection
+    if not np.any(alpha > 0.08):
         return frame
-    local_frame = frame[y0:y_limit, x0:x1]
-    alpha = np.clip(np.asarray(hair_mask[y0:y_limit, x0:x1], np.float32), 0.0, 1.0)
-    alpha = feather(alpha, 6.0) * np.clip(strength, 0, 1)
-    if not np.any(alpha > 0.04):
-        return frame
-    hsv = cv2.cvtColor(local_frame, cv2.COLOR_BGR2HSV).astype(np.float32)
-    gold_hsv = hsv.copy()
-    gold_hsv[:, :, 0] = 23
-    gold_hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 0.4 + 115, 0, 255)
-    gold_hsv[:, :, 2] = np.clip(hsv[:, :, 2] * 1.1 + 30, 0, 255)
-    gold = cv2.cvtColor(gold_hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
-    local_height, local_width = alpha.shape
-    rows = np.linspace(0.0, 1.0, local_height, dtype=np.float32)[:, None]
-    top = np.clip(rows / 0.18, 0.0, 1.0)
-    bottom = np.clip((1.0 - rows) / 0.28, 0.0, 1.0)
-    edge_fade = (top * top * (3.0 - 2.0 * top)) * (bottom * bottom * (3.0 - 2.0 * bottom))
-    mix = np.clip(alpha * 0.7, 0.0, 1.0) * edge_fade
-    out = np.clip(local_frame * (1.0 - mix[:, :, None]) + gold * mix[:, :, None], 0, 255).astype(np.uint8)
-
-    lift = max(10, int(face_height * 0.42 * strength))
-    shifted = cv2.warpAffine(alpha, np.float32([[1, 0, 0], [0, 1, -lift]]), (local_width, local_height))
-    clear = 1.0 - np.clip(alpha, 0.0, 1.0)
-    haze = np.maximum(feather(shifted, 8.0), feather(alpha, 6.0) * 0.85) * clear * 0.66 * edge_fade
-    light = (np.array([52, 196, 255], np.float32) / 255.0) * haze[:, :, None]
-    out = screen_blend(out, light)
+    hsv = cv2.cvtColor(local, cv2.COLOR_BGR2HSV)
+    gold = hsv.astype(np.float32)
+    # Keep the real hair's light and dark strands. Only the hue moves toward gold.
+    gold[:, :, 0] = 23
+    gold[:, :, 1] = np.clip(gold[:, :, 1] * 0.45 + 90, 0, 255)
+    gold[:, :, 2] = np.clip(gold[:, :, 2] * 1.02 + 6, 0, 255)
+    gold = cv2.cvtColor(gold.astype(np.uint8), cv2.COLOR_HSV2BGR)
+    blend = feather(alpha, 0.8) * float(np.clip(strength, 0.0, 1.0))
+    colored = local * (1 - blend[:, :, None]) + gold * blend[:, :, None]
     result = frame.copy()
-    result[y0:y_limit, x0:x1] = out
+    result[top:bottom, left:right] = np.clip(colored, 0, 255).astype(np.uint8)
     return result
+
+
+class HairTreatment:
+    def __init__(self):
+        self.mask = None
+        self.anchor = None
+        self.origin = (0, 0)
+        self.stamp = None
+        self.last_time = None
+        self.visibility = 0.0
+
+    def apply(self, frame, ctx, strength):
+        current = head_anchor(ctx.face)
+        fresh_face = ctx.landmarks_at is None or 0 <= ctx.time - ctx.landmarks_at <= 0.25
+        if current is None or not fresh_face:
+            self.__init__()
+            return frame
+        bounds = head_bounds(current, frame.shape)
+        left, top, right, bottom = bounds
+        if right <= left or bottom <= top:
+            return frame
+        dt = max(0.0, ctx.time - self.last_time) if self.last_time is not None else 0.0
+        self.last_time = ctx.time
+        prior = None
+        if self.mask is not None:
+            prior = warp_mask(self.mask, self.anchor, self.origin, current, bounds)
+        fresh_mask = ctx.hair_mask is not None and ctx.hair_mask_at is not None and 0 <= ctx.time - ctx.hair_mask_at < 0.25
+        if fresh_mask and ctx.hair_mask_at != self.stamp:
+            reference = ctx.hair_reference_anchor if ctx.hair_reference_anchor is not None else current
+            incoming = warp_mask(ctx.hair_mask, reference, (0, 0), current, bounds)
+            elapsed = ctx.hair_mask_at - self.stamp if self.stamp is not None else 1.0
+            alpha = 1 - np.exp(-max(0.0, elapsed) / 0.08)
+            self.mask = incoming if prior is None else prior * (1-alpha) + incoming * alpha
+            self.stamp = ctx.hair_mask_at
+        elif prior is not None:
+            self.mask = prior
+        self.anchor, self.origin = current, (left, top)
+        age = ctx.time - self.stamp if self.stamp is not None else 1.0
+        target = float(np.clip((0.25-age) / 0.10, 0, 1))
+        # Fast confidence fade, gradual recovery; stale masks never remain visible.
+        self.visibility = min(target, self.visibility + dt / 0.12)
+        if age >= 0.25:
+            self.mask = None
+            self.visibility = 0.0
+            return frame
+        return golden_hair(frame, self.mask, ctx.face, strength * self.visibility, bounds=bounds)
 
 
 class SuperSaiyan(Effect):
@@ -66,55 +103,67 @@ class SuperSaiyan(Effect):
     replaces_person = False
     needs_hair_mask = True
 
-    def __init__(self) -> None:
+    def __init__(self):
+        self.handle = None
         self.reset()
 
-    def reset(self) -> None:
-        audio.stop_saiyan()
+    def reset(self):
+        audio.fade_stop(self.handle, 0.02)
+        self.handle = None
         self.phase = "idle"
         self.t0 = 0.0
         self.fade_from = 1.0
+        self.strength = 0.0
         self.window = PoseWindow()
+        self.hair = HairTreatment()
+        self.flow_started = 0.0
 
     def update(self, ctx: FrameContext) -> np.ndarray:
         if "escape" in ctx.keys and self.phase == "idle":
             self.window.arm_release()
             return ctx.frame
-        fresh = ctx.landmarks_at is None or ctx.time - ctx.landmarks_at <= 0.3
+        fresh = ctx.landmarks_at is None or 0 <= ctx.time - ctx.landmarks_at <= 0.3
         pose_ok = fresh and super_saiyan_pose(ctx.hands, ctx.pose_landmarks, ctx.pose_confidence)
         self.window.update(pose_ok, ctx.time, ctx.landmark_timestamp_ms if fresh else None)
         report_pose(ctx.debug, self.id, pose_ok, self.window)
-        if "escape" in ctx.keys and self.phase != "idle":
+        if "escape" in ctx.keys and self.phase not in ("idle", "fading"):
             self._fade(ctx.time)
         elif self.window.fired or "return" in ctx.keys:
             if "return" in ctx.keys:
                 self.window.arm_release()
-            if self.phase == "idle" or self.phase == "fading":
+            if self.phase in ("idle", "fading"):
                 self.phase = "powering"
-                self.t0 = ctx.time
-                audio.start_saiyan()
+                self.t0 = self.flow_started = ctx.time
+                self.handle = audio.start_cue(self.id)
+                self.hair = HairTreatment()
             elif self.phase in ("powering", "active"):
                 self._fade(ctx.time)
         if self.phase == "idle":
             return ctx.frame
+        snapshot = audio.playback_snapshot(self.handle)
+        elapsed = snapshot.elapsed if snapshot is not None else ctx.time - self.flow_started
+        flare = 0.0
         if self.phase == "powering":
-            strength = min(1.0, (ctx.time - self.t0) / POWER_UP)
-            if strength >= 1:
+            progress = min(1.0, elapsed / POWER_UP)
+            self.strength = progress * progress * (3 - 2 * progress)
+            peak = snapshot.opening_peak if snapshot is not None else 0.25
+            flare = max(0, 1 - abs(elapsed - peak) / 0.10) * 0.65
+            if progress >= 1:
                 self.phase = "active"
         elif self.phase == "fading":
-            strength = self.fade_from * max(0.0, 1.0 - (ctx.time - self.t0) / POWER_DOWN)
-            if strength <= 0:
+            self.strength = self.fade_from * max(0, 1 - (ctx.time - self.t0) / POWER_DOWN)
+            if self.strength <= 0:
                 self.phase = "idle"
+                self.hair = HairTreatment()
                 return ctx.frame
         else:
-            strength = 1.0
-        out = silhouette_aura(ctx.frame, ctx.mask, ctx.time, strength)
-        if ctx.hair_mask is not None and ctx.hair_mask_at is not None and ctx.time - ctx.hair_mask_at <= 0.25:
-            out = golden_hair(out, ctx.hair_mask, ctx.face, strength)
-        return out
+            self.strength = 1.0
+        out = silhouette_aura(ctx.frame, ctx.mask, ctx.time-self.flow_started, self.strength + flare)
+        # Slightly faster hair reveal, still tied to the same audible entrance.
+        hair_strength = min(1.0, self.strength * 1.35)
+        return self.hair.apply(out, ctx, hair_strength)
 
-    def _fade(self, now: float) -> None:
-        audio.stop_saiyan()
-        self.fade_from = min(1.0, max(0.0, (now - self.t0) / POWER_UP)) if self.phase == "powering" else 1.0
-        self.phase = "fading"
-        self.t0 = now
+    def _fade(self, now):
+        audio.fade_stop(self.handle, POWER_DOWN)
+        self.fade_from = self.strength
+        self.phase, self.t0 = "fading", now

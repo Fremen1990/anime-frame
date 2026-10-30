@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -51,7 +52,45 @@ class LandmarkObservation:
 
 
 class Landmarks:
+    """Pose, hands and face on a worker thread. The camera loop only reuses the latest result."""
+
     def __init__(self, models: Path) -> None:
+        self._models = models
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="anime-pose")
+        self._hands: HandLandmarker | None = None
+        self._face: FaceLandmarker | None = None
+        self._pose: PoseLandmarker | None = None
+        self._future: Future | None = None
+        self._generation = 0
+        self._last_submit = float("-inf")
+        self._latest: tuple[float, LandmarkObservation] | None = None
+
+    def sample(self, frame_bgr: np.ndarray, timestamp_ms: int, now: float) -> tuple[LandmarkObservation | None, float | None]:
+        if self._future is not None and self._future.done():
+            future, self._future = self._future, None
+            try:
+                generation, _stamp, observation = future.result()
+                if generation == self._generation and observation is not None:
+                    # Age starts when the camera thread can use the pose, not when it was submitted.
+                    self._latest = (now, observation)
+            except Exception as exc:
+                print(f"Landmark detection unavailable: {exc}")
+        if self._future is None and now - self._last_submit >= 0.09:
+            self._last_submit = now
+            self._future = self._executor.submit(self._infer, self._generation, frame_bgr.copy(), int(timestamp_ms), now)
+        if self._latest is None:
+            return None, None
+        return self._latest[1], self._latest[0]
+
+    def reset(self) -> None:
+        self._generation += 1
+        self._latest = None
+        self._last_submit = float("-inf")
+
+    def _ensure(self) -> None:
+        if self._hands is not None:
+            return
+        models = self._models
         self._hands = HandLandmarker.create_from_options(
             HandLandmarkerOptions(
                 base_options=_base(models / "hand_landmarker.task"),
@@ -80,9 +119,11 @@ class Landmarks:
             )
         )
 
-    def detect(
-        self, frame_bgr: np.ndarray, timestamp_ms: int
-    ) -> LandmarkObservation:
+    def _infer(self, generation: int, frame_bgr: np.ndarray, timestamp_ms: int, now: float):
+        self._ensure()
+        return generation, now, self._detect(frame_bgr, timestamp_ms)
+
+    def _detect(self, frame_bgr: np.ndarray, timestamp_ms: int) -> LandmarkObservation:
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         if not rgb.flags["C_CONTIGUOUS"]:
             rgb = np.ascontiguousarray(rgb)
@@ -112,6 +153,19 @@ class Landmarks:
         return LandmarkObservation(timestamp_ms, hands, face, body, hand_world, body_world, confidence)
 
     def close(self) -> None:
-        self._hands.close()
-        self._face.close()
-        self._pose.close()
+        self._generation += 1
+        if self._future is not None:
+            try:
+                self._future.result()
+            except Exception:
+                pass
+            self._future = None
+        if self._hands is not None:
+            def _close() -> None:
+                self._hands.close()
+                self._face.close()
+                self._pose.close()
+
+            self._executor.submit(_close).result()
+            self._hands = self._face = self._pose = None
+        self._executor.shutdown(wait=True)

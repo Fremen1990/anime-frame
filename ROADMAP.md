@@ -42,16 +42,16 @@ Each one leaves you in the chair. Only Instant Transmission needs the empty room
 - [x] **Kamehameha.** Stays in frame. Both hands cupped together beside the torso. A blue-white core charges. A push forward sends a beam across the frame, away from the hands, in about 0.55 seconds, then a short fade. Return charges; another Return fires manually. Escape cancels.
 - [x] **Kikōhō.** Stays in frame. Thumbs and index fingers form a triangle in front of the chest. A push toward the camera fires a gold-white square blast. Return charges; another Return fires manually. Escape cancels. The chooser title is `Kikōhō`.
 
-### Interaction and audio follow-up — live acceptance pending
+### Smooth effects follow-up — live acceptance pending
 
-The current follow-up supersedes the Phase 2 attack controls above. The selected Dragon Ball recordings are installed locally; see `assets/SOURCES.md`.
+This follow-up supersedes the older Phase 2 attack controls above. Selected recordings stay local; see `assets/SOURCES.md`.
 
-- [ ] Super Saiyan: transformation opening once, then a crossfaded sustain made only from the steady portion of the chosen recording. Confirm no opening repeats across several loops.
-- [ ] Kamehameha: forward start → cupped hands beside either side → forward blast, with Charge → Hold → Fire audio. Return advances those three stages. Confirm seated tracking and reliable transitions on both sides.
-- [ ] Kikōhō: direct forward gesture or one Return triggers a single approximately four-second square blast and the full selected recording. No charge or hold. Confirm sound/visual timing feels right.
-- [ ] Confirm Escape, effect/camera switching and recapture stop playback; verify the chooser's stage instructions and clean OBS/Teams output. Recheck 20 fps at 1280×720, or use the documented 960×540 fallback if needed.
+- [ ] Continuous output-only PCM playback: native cached decoding, level balancing, gapless sustain cycles, gesture-controlled release crossfades, generation-safe cancellation, and device-failure warnings. Automated checks cover rendering and timing; listening acceptance is pending.
+- [ ] Kamehameha: cupped hands at either side → forward push, with a continuous tracked orb and an audio-length afterglow. Two Return presses provide manual control. Confirm seated reliability, early-push cancellation, fast/slow release and perceived audiovisual alignment.
+- [ ] Super Saiyan: a 1.7-second sound-aligned entrance, persistent upward-flowing flames, gold on the real hair with head-relative mask alignment, face protection and stale-mask fading. Confirm appearance and movement live.
+- [ ] Confirm repeated activation, long holds, speaker/headphone playback, switching effects/cameras, recapture and Escape. Verify clean OBS/Teams output and at least 20 fps at 1280×720; use the documented 960×540 fallback if optimization cannot meet the target.
 
-Automated tests cover stage order, mirroring and scale, partial hand occlusion, stale/replayed tracking, false pushes, indefinite waiting, keyboard control, cancellation/rearming, and the prepared audio's intro exclusion and continuous sample boundaries. These checks do not replace listening or live camera acceptance.
+Do not mark these complete from synthetic tests alone. Camera, listening and meeting-output acceptance are separate gates.
 
 ## Phase 3 — Presence
 

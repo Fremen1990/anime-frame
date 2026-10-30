@@ -8,6 +8,7 @@ from pathlib import Path
 import cv2
 import mediapipe as mp
 import numpy as np
+from anime_frame.hair_geometry import head_anchor
 from mediapipe.tasks.python.core.base_options import BaseOptions
 from mediapipe.tasks.python.vision import ImageSegmenter, ImageSegmenterOptions, RunningMode
 
@@ -21,6 +22,8 @@ class HairTracker:
         self._generation = 0
         self._last_submit = float("-inf")
         self._latest: tuple[float, np.ndarray] | None = None
+        self.reference_anchor = None
+        self._pending_anchor = None
 
     def _infer(self, generation: int, frame: np.ndarray, timestamp_ms: int, now: float):
         if self._segmenter is None:
@@ -45,17 +48,19 @@ class HairTracker:
             raw = cv2.resize(raw, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
         return generation, now, np.clip(raw, 0.0, 1.0)
 
-    def sample(self, frame: np.ndarray, timestamp_ms: int, now: float) -> tuple[np.ndarray | None, float | None]:
+    def sample(self, frame: np.ndarray, timestamp_ms: int, now: float, face: np.ndarray | None = None) -> tuple[np.ndarray | None, float | None]:
         if self._future is not None and self._future.done():
             future, self._future = self._future, None
             try:
                 generation, stamp, mask = future.result()
                 if generation == self._generation and mask is not None:
                     self._latest = (stamp, mask)
+                    self.reference_anchor = self._pending_anchor
             except Exception as exc:
                 print(f"Hair segmentation unavailable: {exc}")
         if self._future is None and now - self._last_submit >= 0.1:
             self._last_submit = now
+            self._pending_anchor = head_anchor(face)
             self._future = self._executor.submit(self._infer, self._generation, frame.copy(), timestamp_ms, now)
         if self._latest is not None and now - self._latest[0] <= 0.25:
             return self._latest[1], self._latest[0]
@@ -64,6 +69,7 @@ class HairTracker:
     def reset(self) -> None:
         self._generation += 1
         self._latest = None
+        self.reference_anchor = None
         self._last_submit = float("-inf")
 
     def close(self) -> None:

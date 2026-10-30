@@ -44,28 +44,6 @@ class AudioTests(unittest.TestCase):
         self.assertLess(float(np.max(np.abs(opening[-1] - sustain[0]))), 0.004)
         self.assertLess(float(np.max(np.abs(sustain[-1] - sustain[0]))), 0.004)
 
-    def test_saiyan_plays_opening_once_and_queues_only_the_sustain(self) -> None:
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            for name in audio.PREPARED_RECORDINGS:
-                (root / f"{name}.wav").write_bytes(b"prepared recording")
-            with patch("anime_frame.audio.default_assets", return_value=root), patch("anime_frame.audio.play") as play, patch("anime_frame.audio.loop") as loop:
-                audio.start_saiyan()
-                play.assert_called_once_with("super_saiyan_start")
-                loop.assert_called_once_with("super_saiyan_sustain", after="super_saiyan_start")
-                self.assertEqual(audio.sound_path("super_saiyan_sustain"), root / "super_saiyan_sustain.wav")
-
-    def test_missing_prepared_sustain_never_loops_the_original_intro(self) -> None:
-        with patch("anime_frame.audio.sound_path", return_value=None), patch("anime_frame.audio.play") as play, patch("anime_frame.audio.loop") as loop:
-            audio.start_saiyan()
-            play.assert_called_once_with("super_saiyan_aura")
-            loop.assert_not_called()
-
-    def test_saiyan_cancellation_stops_queued_sustain_before_opening(self) -> None:
-        with patch("anime_frame.audio.stop") as stop:
-            audio.stop_saiyan()
-            self.assertEqual([call.args[0] for call in stop.call_args_list][:2], ["super_saiyan_sustain", "super_saiyan_start"])
-
     def test_play_uses_afplay_with_a_fixed_argument_list(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

@@ -61,71 +61,53 @@ def _point(pos: np.ndarray, width: int, height: int) -> tuple[int, int]:
     return int(np.clip(pos[0], -40, width + 40)), int(np.clip(pos[1], -40, height + 40))
 
 
-def _electricity(binary_u8: np.ndarray, now: float) -> tuple[np.ndarray, np.ndarray] | None:
-    """Short jagged flames around the silhouette, plus a few branching arcs."""
-    contours, _ = cv2.findContours(binary_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    if not contours:
-        return None
-    contour = max(contours, key=cv2.contourArea)
-    if len(contour) < 16:
-        return None
-    points = contour[:, 0, :].astype(np.float32)
-    step = max(1, len(points) // 80)
-    points = points[::step]
-    count = len(points)
-    if count < 8:
-        return None
-    height, width = binary_u8.shape
-    normals = _outward_normals(points)
-    body = float(points[:, 1].max() - points[:, 1].min())
-    reach = max(22.0, body * 0.22)
-    outside = (binary_u8 == 0).astype(np.uint8)
-    dist = cv2.distanceTransform(outside, cv2.DIST_L2, 3)
-    generator = np.random.default_rng(int(now * 7.0) & 0xFFFF)
-    coarse = generator.random((max(2, height // 10), max(2, width // 10))).astype(np.float32)
-    coarse = cv2.resize(coarse, (width, height), interpolation=cv2.INTER_CUBIC)
-    coarse = cv2.GaussianBlur(coarse, (0, 0), 2.2)
-    fine = generator.random((max(2, height // 5), max(2, width // 5))).astype(np.float32)
-    fine = cv2.resize(fine, (width, height), interpolation=cv2.INTER_LINEAR)
+def _electricity(small: np.ndarray, now: float) -> tuple[np.ndarray, np.ndarray] | None:
+    """Persistent, upward-flowing flames in body coordinates; sparse soft arcs.
 
-    def _unit(image: np.ndarray) -> np.ndarray:
-        span = float(image.max() - image.min())
-        return (image - float(image.min())) / max(span, 1e-3)
-
-    coarse, fine = _unit(coarse), _unit(fine)
-    # High peaks stick out as flame tips. The base stays a solid glow.
-    radius = 6.0 + coarse * reach * 0.35 + np.power(fine, 1.6) * reach * 0.8
-    flame = np.clip(1.0 - dist / np.maximum(radius, 1.0), 0.0, 1.0).astype(np.float32)
-    flame[binary_u8 > 0] = 0
-    flame = cv2.GaussianBlur(flame, (0, 0), 1.5)
-    arcs = np.zeros((height, width), np.uint8)
-    for _bolt in range(6):
-        cursor = int(generator.integers(0, count))
-        normal = normals[cursor]
-        tangent = np.array((-normal[1], normal[0]), np.float32)
-        direction = normal * 0.35 + tangent * float(generator.choice((-1.0, 1.0)))
-        direction /= max(float(np.linalg.norm(direction)), 1e-3)
-        pos = points[cursor] + normal * float(generator.uniform(8.0, reach * 0.45))
-        poly = [_point(pos, width, height)]
-        for _step in range(6):
-            direction = direction * 0.5 + generator.normal(size=2) * 0.65
-            direction /= max(float(np.linalg.norm(direction)), 1e-3)
-            pos = pos + direction * float(generator.uniform(14.0, 32.0))
-            poly.append(_point(pos, width, height))
-        cv2.polylines(arcs, [np.asarray(poly, np.int32)], False, 255, 2, cv2.LINE_AA)
-        branch = pos
-        branch_dir = np.array(generator.normal(size=2), np.float32)
-        branch_dir /= max(float(np.linalg.norm(branch_dir)), 1e-3)
-        branch_poly = [_point(branch, width, height)]
-        for _step in range(3):
-            branch = branch + branch_dir * float(generator.uniform(12.0, 24.0))
-            branch_dir = branch_dir * 0.4 + generator.normal(size=2) * 0.7
-            branch_dir /= max(float(np.linalg.norm(branch_dir)), 1e-3)
-            branch_poly.append(_point(branch, width, height))
-        cv2.polylines(arcs, [np.asarray(branch_poly, np.int32)], False, 255, 2, cv2.LINE_AA)
-    arcs[binary_u8 > 0] = 0
-    arc = cv2.GaussianBlur(arcs, (0, 0), 2.6).astype(np.float32) * (1.0 / 255.0)
-    return flame, arc
+    `small` is the person mask already reduced to a third of the crop.
+    """
+    points = cv2.findNonZero(small)
+    if points is None:
+        return None
+    bx, by, bw, bh = cv2.boundingRect(points)
+    h, w = small.shape
+    x = (np.arange(w, dtype=np.float32)[None, :] - (bx + bw * 0.5)) / max(bw, 1)
+    y = (np.arange(h, dtype=np.float32)[:, None] - by) / max(bh, 1)
+    flow = y + np.float32(now * 0.32)
+    noise = (np.sin(x * 21 + flow * 9) + 0.5 * np.sin(x * 43 - flow * 14 + 1.7) + 0.3 * np.sin(x * 71 + flow * 22)) / 1.8
+    radius = max(5.0, bh * 0.12) * (0.45 + 0.55 * ((noise + 1) * 0.5) ** 2)
+    dist = cv2.distanceTransform((small == 0).astype(np.uint8), cv2.DIST_L2, 3)
+    flame = np.clip(1 - dist / radius, 0, 1).astype(np.float32)
+    flame[small > 0] = 0
+    flame = cv2.GaussianBlur(flame, (0, 0), 0.85)
+    accents = np.zeros((h, w), np.float32)
+    # Repeatable particle lifetimes and positions, with zero intensity at wrap.
+    for index in range(9):
+        phase = (now * 0.22 + index * 0.137) % 1
+        side = -1 if index % 2 else 1
+        px = bx + bw * 0.5 + side * bw * (0.55 + 0.08 * np.sin(index * 2.4 + now * 0.8))
+        py = by + bh * (1.05 - phase * 1.2)
+        brightness = float(np.sin(np.pi * phase) ** 2) * 0.65
+        cv2.circle(accents, (int(px), int(py)), 1, brightness, -1, cv2.LINE_AA)
+    cycle = int(now / 1.8)
+    life = (now % 1.8) / 0.18
+    if life < 1:
+        generator = np.random.default_rng(cycle & 0xFFFF)
+        contours, _ = cv2.findContours(small, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        if contours:
+            contour = max(contours, key=cv2.contourArea)[:, 0, :].astype(np.float32)
+            normals = _outward_normals(contour)
+            for _ in range(2):
+                index = int(generator.integers(len(contour)))
+                pos = contour[index] + normals[index] * 5
+                poly = [tuple(pos.astype(int))]
+                for _ in range(5):
+                    pos = pos + generator.normal(size=2) * 5 + normals[index] * 2
+                    poly.append(tuple(pos.astype(int)))
+                cv2.polylines(accents, [np.asarray(poly, np.int32)], False, float(np.sin(np.pi * life) ** 2), 1, cv2.LINE_AA)
+    accents[small > 0] = 0
+    accents = cv2.GaussianBlur(accents, (0, 0), 0.65)
+    return flame, accents
 
 
 def silhouette_aura(frame: np.ndarray, mask: np.ndarray, now: float, strength: float) -> np.ndarray:
@@ -149,27 +131,30 @@ def silhouette_aura(frame: np.ndarray, mask: np.ndarray, now: float, strength: f
         return frame
     local_frame = frame[top:bottom, left:right]
     crop_h, crop_w = local_u8.shape
-    small_w, small_h = max(1, crop_w // 3), max(1, crop_h // 3)
-    small = cv2.resize(local_u8, (small_w, small_h), interpolation=cv2.INTER_AREA).astype(np.float32)
-    wide = cv2.GaussianBlur(small, (0, 0), wide_sigma / 3.0)
-    near = cv2.GaussianBlur(small, (0, 0), 9.0 / 3.0)
-    wide_up = cv2.resize(wide, (crop_w, crop_h), interpolation=cv2.INTER_LINEAR)
-    near_up = cv2.resize(near, (crop_w, crop_h), interpolation=cv2.INTER_LINEAR)
-    protect = np.clip((near_up - 0.58) / 0.42, 0.0, 1.0)
-    veil = np.clip(wide_up * (1.0 - protect), 0.0, 1.0)
-    edge = np.clip(near_up * (1.0 - protect), 0.0, 1.0)
-    pulse = 0.74 + 0.26 * (0.5 + 0.5 * np.sin(now * 3.2))
+    small_w, small_h = max(2, crop_w // 3), max(2, crop_h // 3)
+    small = cv2.resize(local_u8, (small_w, small_h), interpolation=cv2.INTER_NEAREST)
+    small_f = small.astype(np.float32)
+    # Blur sigmas are in the reduced image, so they match the old full-crop falloff.
+    wide = cv2.GaussianBlur(small_f, (0, 0), wide_sigma / 3.0)
+    near = cv2.GaussianBlur(small_f, (0, 0), 9.0 / 3.0)
+    protect = np.clip((near - 0.58) / 0.42, 0.0, 1.0)
+    veil = np.clip(wide * (1.0 - protect), 0.0, 1.0)
+    edge = np.clip(near * (1.0 - protect), 0.0, 1.0)
+    pulse = 0.88 + 0.12 * (0.5 + 0.5 * np.sin(now * 2.2))
     amount = float(np.clip(strength, 0.0, 1.5)) * pulse
     light = _GOLD * veil[:, :, None] * (0.9 * amount) + _WARM_WHITE * edge[:, :, None] * (0.34 * amount)
-    electric = _electricity(local_u8, now)
+    electric = _electricity(small, now)
     if electric is not None:
         flame, arc = electric
         light += _GOLD * flame[:, :, None] * (1.25 * amount)
         light += _ARC * arc[:, :, None] * (1.05 * amount)
-    deep = near_up >= 0.985
+    deep = near >= 0.985
     light[deep] = 0
-    lit = screen_blend(local_frame, np.clip(light, 0.0, 1.0))
-    lit[deep] = local_frame[deep]
+    preview = cv2.resize(local_frame, (small_w, small_h), interpolation=cv2.INTER_AREA)
+    lit = cv2.resize(screen_blend(preview, np.clip(light, 0.0, 1.0)), (crop_w, crop_h), interpolation=cv2.INTER_LINEAR)
+    # The body interior stays the original photo. copyTo is much faster than boolean indexing.
+    interior = cv2.resize((deep.astype(np.uint8) * 255), (crop_w, crop_h), interpolation=cv2.INTER_NEAREST)
+    cv2.copyTo(local_frame, interior, lit)
     result = frame.copy()
     result[top:bottom, left:right] = lit
     return result
@@ -202,7 +187,7 @@ def charge_core(frame: np.ndarray, center: tuple[float, float], radius: float, s
     return result
 
 
-def camera_blast(frame: np.ndarray, origin: tuple[float, float], progress: float, strength: float, color: tuple[int, int, int]) -> np.ndarray:
+def camera_blast(frame: np.ndarray, origin: tuple[float, float], progress: float, strength: float, color: tuple[int, int, int], initial_radius: float = 36.0) -> np.ndarray:
     """A wash of light that grows from the hands until it fills the frame."""
     if strength <= 0 or progress < 0:
         return frame
@@ -213,7 +198,7 @@ def camera_blast(frame: np.ndarray, origin: tuple[float, float], progress: float
     xs = np.arange(small_w, dtype=np.float32)[None, :]
     dist = np.hypot(xs - np.float32(origin[0] / 3.0), ys - np.float32(origin[1] / 3.0)) * 3.0
     far = float(math.hypot(width, height))
-    radius = max(36.0, far * shown)
+    radius = max(initial_radius, far * shown)
     halo = np.exp(-(dist * dist) / (2.0 * (radius * 0.5) ** 2))
     core = np.exp(-(dist * dist) / (2.0 * (max(18.0, radius * 0.2)) ** 2))
     ring_at = radius * 0.78

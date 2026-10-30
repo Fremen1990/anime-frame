@@ -12,3 +12,4 @@ assets/*.png
 assets/*.jpg
 assets/*.jpeg
 assets/*.webp
+assets/.pcm-cache/

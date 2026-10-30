@@ -31,16 +31,17 @@ GUIDES: dict[str, tuple[str, ...]] = {
     "super_saiyan": (
         "Clench both fists beside your shoulders.",
         "Hold for about a second to power up.",
-        "Gold hair, flames, and lightning stay on.",
-        "The opening plays once; only the aura sound repeats.",
+        "Your own hair turns gold. Flowing flames stay on.",
+        "The sound opens once, then the aura flows continuously.",
         "Repeat the pose or press Escape to turn it off.",
     ),
     "kamehameha": (
-        "1. Hands together toward the camera. Hold briefly.",
-        "2. Cup them beside either side of your torso.",
-        "The blue-white core stays ready until you fire.",
-        "3. Push both hands toward the camera again.",
-        "Return advances one stage. Escape cancels.",
+        "1. Cup both hands beside either side of your torso.",
+        "Keep them there while the blue-white orb grows.",
+        "The orb stays ready until you choose to release.",
+        "2. Push both hands toward the camera to fire.",
+        "Return starts; another Return fires when ready.",
+        "Escape cancels.",
     ),
     "kikoho": (
         "Hands together at chest height, aimed at the camera.",
@@ -115,22 +116,22 @@ def _draw_power(image: np.ndarray, box: tuple[int, int, int, int]) -> None:
 
 def _draw_kame(image: np.ndarray, box: tuple[int, int, int, int]) -> None:
     x0, y0, x1, _ = box
-    step = (x1 - x0) // 3
+    step = (x1 - x0) // 2
     cy = y0 + 125
-    for index, label in enumerate(("1 START", "2 HOLD", "3 FIRE")):
+    for index, label in enumerate(("1 CHARGE", "2 PUSH")):
         cx = x0 + step * index + step // 2
         _head(image, (cx, cy), 16)
         cv2.line(image, (cx, cy + 20), (cx, cy + 90), INK, 2, cv2.LINE_AA)
-        hx, hy = (cx + 28, cy + 68) if index == 1 else (cx, cy + 46)
+        hx, hy = (cx + 28, cy + 68) if index == 0 else (cx, cy + 46)
         for side in (-1, 1):
             cv2.line(image, (cx + side * 20, cy + 30), (hx + side * 5, hy), INK, 2, cv2.LINE_AA)
             cv2.circle(image, (hx + side * 5, hy), 7, CYAN, 2, cv2.LINE_AA)
-        if index == 1:
+        if index == 0:
             cv2.circle(image, (hx, hy), 17, (255, 235, 155), 1, cv2.LINE_AA)
         else:
             cv2.ellipse(image, (hx, hy), (23, 18), 0, 0, 360, CYAN, 1, cv2.LINE_AA)
         cv2.putText(image, label, (cx - 30, cy + 118), cv2.FONT_HERSHEY_SIMPLEX, 0.35, INK, 1, cv2.LINE_AA)
-        if index < 2:
+        if index < 1:
             cv2.arrowedLine(image, (cx + 30, cy - 40), (cx + step - 30, cy - 40), CYAN, 1, cv2.LINE_AA, tipLength=0.3)
 
 

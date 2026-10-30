@@ -3,3 +3,4 @@ mediapipe>=0.10.31,<0.10.32
 opencv-python>=4.11,<4.15
 numpy>=1.26,<2.6
 pyvirtualcam>=0.14,<0.16
+sounddevice>=0.5.6,<0.6

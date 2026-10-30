@@ -4,10 +4,10 @@ Selected by the user on 2026-10-29. The MP3 files are local, gitignored assets. 
 
 | Local filename | Selection / preview | Duration | Playback |
 | --- | --- | --- | --- |
-| `super_saiyan_aura.mp3` | [S1 — Super Saiyan Aura](https://www.myinstants.com/en/instant/super-saiyan-aura/) | 5.784 s | Source for opening-once and steady-tail WAVs |
-| `kamehameha_charge.mp3` | [K1 — Charge](https://www.myinstants.com/en/instant/kamehameha-charge-98464/) | 6.200 s | Begins at the forward starting gesture; stops when hands move to the side |
-| `kamehameha_hold.mp3` | [K1 — Hold](https://www.myinstants.com/en/instant/kamehameha-hold-8778/) | 3.228 s | Loops when the side pose is confirmed, until the final forward push or cancellation |
-| `kamehameha_release.mp3` | [K1 — Fire](https://www.myinstants.com/en/instant/kamehameha-fire-67210/) | 5.702 s | Plays on release |
+| `super_saiyan_aura.mp3` | [S1 — Super Saiyan Aura](https://www.myinstants.com/en/instant/super-saiyan-aura/) | 5.784 s | Opening once, then a steady region looped in the PCM stream |
+| `kamehameha_charge.mp3` | [K1 — Charge](https://www.myinstants.com/en/instant/kamehameha-charge-98464/) | 6.200 s | Plays after the cupped side gesture. The fading tail is skipped; a later slice of this same file loops until the push |
+| `kamehameha_hold.mp3` | [K1 — Hold](https://www.myinstants.com/en/instant/kamehameha-hold-8778/) | 3.228 s | Kept on disk. Not played |
+| `kamehameha_release.mp3` | [K1 — Fire](https://www.myinstants.com/en/instant/kamehameha-fire-67210/) | 5.702 s | Plays on release, trimmed to 4.2 s |
 | `kikoho_release.mp3` | [T1 — Shin Kikōhō](https://www.myinstants.com/en/instant/shin-kikoho-2366/) | 4.023 s | Plays once with a direct attack, with no charge stage |
 
 Instant Transmission continues to use its previously supplied local MP3. Kikōhō has no charging or holding stage.
@@ -22,8 +22,12 @@ All five new files were validated with `ffprobe` as MP3 audio. Original download
 | `kamehameha_release.mp3` | [basicbeam_fire.mp3](https://www.myinstants.com/media/sounds/basicbeam_fire.mp3) | `93e7955387daa5df5d7cf5e71c984576debcd92cadd0a5c846a39b9db95924d7` |
 | `kikoho_release.mp3` | [shin-kikoho_dZH4mUt.mp3](https://www.myinstants.com/media/sounds/shin-kikoho_dZH4mUt.mp3) | `b3d3ad9d69ffac0d99a19cc0a4f6ff08f15600ddea787d991959734e6057369e` |
 
-## Prepared Super Saiyan playback
+## Continuous playback preparation
 
-`super_saiyan_start.wav` (30.44 s) preserves the beginning of S1 once, then continues with its steady aura. `super_saiyan_sustain.wav` (28.56 s) contains only the steady portion and is the only file looped. Both are 48 kHz stereo PCM, local and gitignored; the original MP3 is preserved.
+The original MP3s remain unchanged. Native macOS `afconvert` decodes them to 48 kHz stereo PCM before camera processing; cache entries live in ignored `assets/.pcm-cache/` and are keyed by source SHA-256 plus preparation version. Run `.venv/bin/python -m anime_frame.audio_prepare` to prepare or validate them. No ffmpeg is required.
 
-Recipe: take 1.70–5.45 seconds of the source, join the tail to the head with a 180 ms crossfade, and repeat that cycle eight times per bed. The opening preserves source audio through 1.88 seconds before continuing into those cycles. Long beds reduce afplay restart gaps; they do not guarantee sample-accurate gapless playback between processes. Run `.venv/bin/python -m anime_frame.audio_prepare` to reproduce them (ffmpeg required for preparation only). These are edits of the chosen recording, not synthesized replacements. The cut is based on waveform analysis; listening acceptance is pending.
+Kamehameha Charge targets -18 dBFS RMS and Fire -16 dBFS, with gain capped for peak headroom. Playback uses Charge through 5.0 s, then loops 3.8–5.0 s of that same Charge with a 180 ms crossfade. Fire is the first 4.2 s, with an 80 ms crossfade from the gesture and a short fade at the trim. The Hold file is not part of the cue.
+
+Super Saiyan retains the source opening and uses only 1.70–5.45 seconds for its sustain, with a 180 ms tail-to-head crossfade. A persistent output stream repeats that cycle without process restart gaps. The source's dynamics are preserved with peak headroom. The prior `super_saiyan_start.wav` and `super_saiyan_sustain.wav` are preserved as legacy derived files and are no longer used by the effect.
+
+These are edits of the user's selected recordings, not synthesized replacements. Listening acceptance and live audiovisual alignment remain pending until tested with the user's gestures and output devices.

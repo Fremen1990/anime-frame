@@ -119,10 +119,14 @@ class PoseTests(unittest.TestCase):
 
 
 class AttackTests(unittest.TestCase):
-    def setUp(self) -> None:
+    def setUp(self):
         self.play = patch("anime_frame.audio.play").start()
         self.loop = patch("anime_frame.audio.loop").start()
         self.stop = patch("anime_frame.audio.stop").start()
+        self.start_audio = patch("anime_frame.audio.start_cue", return_value=123).start()
+        self.release_audio = patch("anime_frame.audio.release_cue").start()
+        self.fade_audio = patch("anime_frame.audio.fade_stop").start()
+        patch("anime_frame.audio.playback_snapshot", return_value=None).start()
         self.addCleanup(patch.stopall)
 
     def context(self, now, stage="front", observation=None, keys=()):
@@ -135,145 +139,150 @@ class AttackTests(unittest.TestCase):
 
     def start(self):
         effect = Kamehameha()
-        for index in range(8):
-            effect.update(self.context(index / 10))
+        for index in range(4):
+            effect.update(self.context(index/10, "side"))
         self.assertEqual(effect.phase, "charging")
         return effect
 
     def ready(self):
         effect = self.start()
-        for index in range(8, 12):
-            effect.update(self.context(index / 10, "side"))
+        for index in range(4, 12):
+            effect.update(self.context(index/10, "side"))
         self.assertEqual(effect.phase, "ready")
         return effect
 
-    def test_three_physical_stages_own_their_audio(self) -> None:
-        effect = self.start()
-        self.play.assert_called_once_with("kamehameha_charge")
-        self.loop.assert_not_called()
-        for index in range(8, 12):
-            effect.update(self.context(index / 10, "side"))
-        self.assertEqual(effect.phase, "ready")
-        self.stop.assert_any_call("kamehameha_charge")
-        self.loop.assert_called_once_with("kamehameha_hold")
-        effect.update(self.context(1.2))
-        self.assertEqual(effect.phase, "ready")
-        effect.update(self.context(1.3))
-        self.assertEqual(effect.phase, "firing")
-        self.stop.assert_any_call("kamehameha_hold")
-        self.play.assert_called_with("kamehameha_release")
-        effect.update(self.context(1.9))
-        self.assertEqual(effect.phase, "fading")
-        effect.update(self.context(2.11))
-        self.assertEqual(effect.phase, "idle")
+    def test_two_physical_stages_start_one_cue_then_release_it(self):
+        effect = self.ready()
+        self.start_audio.assert_called_once_with("kamehameha")
+        self.loop.assert_not_called(); self.play.assert_not_called()
+        effect.update(self.context(1.2)); self.assertEqual(effect.phase, "ready")
+        effect.update(self.context(1.3)); self.assertEqual(effect.phase, "firing")
+        self.release_audio.assert_called_once_with(123)
+        effect.update(self.context(3)); self.assertEqual(effect.phase, "fading")
+        effect.update(self.context(7.01)); self.assertEqual(effect.phase, "idle")
 
-    def test_side_pose_cannot_start_and_initial_forward_cannot_fire(self) -> None:
+    def test_forward_pose_cannot_start_or_skip_side_confirmation(self):
         effect = Kamehameha()
-        for index in range(12):
-            effect.update(self.context(index / 10, "side"))
+        for index in range(15): effect.update(self.context(index/10))
         self.assertEqual(effect.phase, "idle")
-        self.play.assert_not_called()
-        effect = self.start()
-        for index in range(8, 25):
-            effect.update(self.context(index / 10))
-        self.assertEqual(effect.phase, "charging")
-        self.loop.assert_not_called()
+        self.start_audio.assert_not_called()
+        for index in range(15, 18): effect.update(self.context(index/10, "side"))
+        self.assertEqual(effect.phase, "idle")
 
-    def test_side_stage_rejects_front_cup_and_brief_side_near_miss(self) -> None:
+    def test_early_push_cancels_and_is_never_queued(self):
         effect = self.start()
-        for index in range(8, 12):
-            ctx = self.context(index / 10, "side")
-            ctx.pose_landmarks = _body(((100, 145), (140, 145)))
-            ctx.hands = [_hand((100, 145), True)]
-            effect.update(ctx)
-        self.assertEqual(effect.phase, "charging")
-        for index in range(12, 14):
-            effect.update(self.context(index / 10, "side"))
-        for index in range(14, 16):
-            effect.update(self.context(index / 10))
-        self.assertEqual(effect.phase, "charging")
+        effect.update(self.context(0.4))
+        self.assertEqual(effect.phase, "cancelling")
+        for index in range(6, 20): effect.update(self.context(index/10))
+        self.assertEqual(effect.phase, "idle")
+        self.release_audio.assert_not_called()
 
-    def test_full_sequence_mirrored_scaled_swapped_and_one_hidden_mesh(self) -> None:
+    def test_full_sequence_mirrored_scaled_swapped_and_one_hidden_mesh(self):
         for scale in (0.6, 1.7):
             for direction in (-1, 1):
                 effect = Kamehameha()
-                for index, stage in enumerate(["front"] * 8 + ["side"] * 4 + ["front"] * 2):
-                    ctx = self.context(index / 10, stage)
-                    ctx.pose_landmarks *= (scale * direction, scale)
-                    ctx.hands = [(hand * (scale * direction, scale)) for hand in ctx.hands[::-1]][:1]
+                for index, stage in enumerate(["side"]*12+["front"]*2):
+                    ctx = self.context(index/10, stage)
+                    ctx.pose_landmarks *= (scale*direction, scale)
+                    ctx.hands = [hand*(scale*direction, scale) for hand in ctx.hands[::-1]][:1]
                     ctx.pose_world_landmarks[:, 0] *= direction
                     effect.update(ctx)
                 self.assertEqual(effect.phase, "firing")
 
-    def test_ready_waits_then_requires_two_real_forward_observations(self) -> None:
+    def test_ready_waits_indefinitely_but_lean_one_hand_and_jitter_do_not_fire(self):
         effect = self.ready()
-        for index in range(12, 200):
-            effect.update(self.context(index / 10, "side"))
+        for index in range(12, 100): effect.update(self.context(index/10, "side"))
         self.assertEqual(effect.phase, "ready")
-        effect.update(self.context(20.0))
-        effect.update(self.context(20.1))
-        self.assertEqual(effect.phase, "firing")
-
-    def test_lean_raise_one_hand_and_jitter_cannot_release(self) -> None:
-        effect = self.ready()
-        for index in range(12, 16):
-            ctx = self.context(index / 10)
-            ctx.pose_world_landmarks = _world(lean=-0.4)
+        for index in range(100, 104):
+            ctx = self.context(index/10); ctx.pose_world_landmarks = _world(lean=-0.4)
             effect.update(ctx)
-        self.assertEqual(effect.phase, "ready")
-        for index in range(16, 20):
-            ctx = self.context(index / 10)
-            ctx.pose_world_landmarks[16] = _world()[16]
+        for index in range(104, 108):
+            ctx = self.context(index/10); ctx.pose_world_landmarks[16] = _world()[16]
             effect.update(ctx)
-        self.assertEqual(effect.phase, "ready")
-        for index in range(20, 26):
-            effect.update(self.context(index / 10, "front" if index % 2 else "side"))
+        for index in range(108, 114): effect.update(self.context(index/10, "front" if index%2 else "side"))
         self.assertEqual(effect.phase, "ready")
 
-    def test_stale_missing_or_repeated_tracking_cancels_both_waiting_stages(self) -> None:
+    def test_stale_missing_repeated_or_invalid_depth_cancels_charging_and_ready(self):
         for make in (self.start, self.ready):
             for kind in ("stale", "missing", "repeated", "low_confidence", "nan"):
-                effect = make()
-                last = effect.last_motion_observation
-                ctx = self.context(float(last) + 0.31)
-                if kind == "stale":
-                    ctx.landmarks_at = float(last)
-                elif kind == "missing":
-                    ctx.pose_world_landmarks = None
-                elif kind == "repeated":
-                    ctx.landmark_timestamp_ms = last
+                effect = make(); last = float(effect.last_motion_observation)
+                ctx = self.context(last+0.31)
+                if kind == "stale": ctx.landmarks_at = last
+                elif kind == "missing": ctx.pose_world_landmarks = None
+                elif kind == "repeated": ctx.landmark_timestamp_ms = last
                 elif kind == "low_confidence":
-                    ctx.pose_confidence = np.ones(33)
-                    ctx.pose_confidence[13] = 0.1
-                else:
-                    ctx.pose_world_landmarks[14, 2] = np.nan
+                    ctx.pose_confidence = np.ones(33); ctx.pose_confidence[13] = 0.1
+                else: ctx.pose_world_landmarks[14, 2] = np.nan
                 effect.update(ctx)
-                self.assertEqual(effect.phase, "idle", kind)
+                self.assertEqual(effect.phase, "cancelling", kind)
+                effect.update(_context(last+0.45))
+                self.assertEqual(effect.phase, "idle")
 
-    def test_keyboard_advances_three_stages_without_tracking_or_auto_fire(self) -> None:
+    def test_keyboard_two_presses_no_tracking_no_auto_fire(self):
         effect = Kamehameha()
         effect.update(_context(0, keys={"return"}))
+        effect.update(_context(0.1, keys={"return"}))
         self.assertEqual(effect.phase, "charging")
-        effect.update(_context(50))
-        self.assertEqual(effect.phase, "charging")
-        effect.update(_context(50.1, keys={"return"}))
-        self.assertEqual(effect.phase, "ready")
-        effect.update(_context(120))
-        self.assertEqual(effect.phase, "ready")
-        effect.update(_context(120.1, keys={"return"}))
-        self.assertEqual(effect.phase, "firing")
+        effect.update(_context(0.71)); self.assertEqual(effect.phase, "ready")
+        effect.update(_context(60)); self.assertEqual(effect.phase, "ready")
+        effect.update(_context(60.1, keys={"return"})); self.assertEqual(effect.phase, "firing")
+        effect.update(_context(60.2, keys={"return"})); self.release_audio.assert_called_once()
 
-    def test_completed_blast_requires_lowered_hands_before_restarting(self) -> None:
+    def test_completed_blast_requires_release_before_recharging(self):
         effect = self.ready()
-        for now in (1.2, 1.3, 2.2):
-            effect.update(self.context(now))
-        for index in range(23, 34):
-            effect.update(self.context(index / 10))
+        effect.update(self.context(1.2)); effect.update(self.context(1.3))
+        effect.update(self.context(7.1, "side"))
+        for index in range(72, 82): effect.update(self.context(index/10, "side"))
         self.assertEqual(effect.phase, "idle")
-        effect.update(self.context(3.4, "side"))
-        for index in range(35, 43):
-            effect.update(self.context(index / 10))
+        effect.update(self.context(8.2))
+        for index in range(83, 87): effect.update(self.context(index/10, "side"))
         self.assertEqual(effect.phase, "charging")
+
+    def test_release_starts_with_identical_orb_without_contraction(self):
+        effect = Kamehameha()
+        effect.update(_context(0, keys={"return"})); effect.update(_context(1))
+        before = effect.update(_context(1.1))
+        after = effect.update(_context(1.1, keys={"return"}))
+        np.testing.assert_array_equal(before, after)
+
+    def test_render_anchor_moves_between_tracking_samples_with_bounded_prediction(self):
+        from anime_frame.attack import MotionAnchor
+        anchor = MotionAnchor()
+        first = self.context(0, "side", 0); anchor.update(first)
+        moved = self.context(0.1, "side", 1); moved.pose_landmarks[:, 0] += 80
+        point1, _ = anchor.update(moved)
+        moved.time = 0.12
+        point2, _ = anchor.update(moved)
+        self.assertGreater(point2[0], point1[0])
+        self.assertLess(point2[0], 265)
+
+    def test_escape_and_shutdown_cancel_all_stages(self):
+        for phase in ("charging", "ready", "firing", "fading"):
+            effect = self.ready(); effect.phase = phase
+            ctx = _context(1.2, keys={"escape"})
+            np.testing.assert_array_equal(effect.update(ctx), ctx.frame)
+            self.assertEqual(effect.phase, "idle")
+            self.fade_audio.assert_called_with(123, 0.02)
+        app = App(); app.active = effect
+        with patch("anime_frame.audio.shutdown") as shutdown, patch("anime_frame.app.cv2.destroyAllWindows"):
+            app.close(); shutdown.assert_called_once()
+
+    def test_saiyan_opening_once_and_deactivation_fades(self):
+        effect = SuperSaiyan()
+        effect.update(_context(0, keys={"return"}))
+        for now in (0.7, 1.7, 5.8, 60): effect.update(_context(now))
+        self.assertEqual(effect.phase, "active")
+        self.start_audio.assert_called_once_with("super_saiyan")
+        effect.update(_context(60.1, keys={"escape"}))
+        self.fade_audio.assert_called_with(123, 0.4)
+        effect.update(_context(60.51)); self.assertEqual(effect.phase, "idle")
+
+    def test_status_is_confined_to_chooser(self):
+        effect = Kamehameha(); ctx = _context(0)
+        np.testing.assert_array_equal(effect.update(ctx), ctx.frame)
+        self.assertIn("Cup hands", effect.status)
+        effect.update(_context(0.1, keys={"return"})); effect.update(_context(1))
+        self.assertIn("Push both", effect.status)
 
     def test_kikoho_fires_once_without_charging_and_runs_for_whole_clip(self) -> None:
         effect = Kikoho()
@@ -321,41 +330,6 @@ class AttackTests(unittest.TestCase):
         np.testing.assert_array_equal(out, _context(0.1).frame)
         self.stop.assert_any_call("kikoho_release")
 
-    def test_escape_cancels_every_kamehameha_stage_and_shutdown_stops_audio(self) -> None:
-        for presses in range(1, 4):
-            effect = Kamehameha()
-            for index in range(presses):
-                effect.update(_context(index / 10, keys={"return"}))
-            effect.update(_context(0.5, keys={"escape"}))
-            self.assertEqual(effect.phase, "idle")
-        self.stop.reset_mock()
-        app = App()
-        app.active = effect
-        with patch("anime_frame.app.cv2.destroyAllWindows"):
-            app.close()
-        self.stop.assert_any_call("kamehameha_hold")
-        self.stop.assert_any_call("kamehameha_release")
-
-    def test_saiyan_opening_not_restarted_while_transformed(self) -> None:
-        with patch("anime_frame.audio.start_saiyan") as start, patch("anime_frame.audio.stop_saiyan") as stop:
-            effect = SuperSaiyan()
-            effect.update(_context(0, keys={"return"}))
-            for now in (0.7, 5.8, 11.6, 60):
-                effect.update(_context(now))
-            self.assertEqual(effect.phase, "active")
-            start.assert_called_once()
-            effect.update(_context(60.1, keys={"escape"}))
-            stop.assert_called()
-
-    def test_status_names_current_stage_and_is_not_drawn_on_video(self) -> None:
-        effect = Kamehameha()
-        frame = _context(0)
-        np.testing.assert_array_equal(effect.update(frame), frame.frame)
-        self.assertIn("1/3", effect.status)
-        effect.update(_context(0.1, keys={"return"}))
-        self.assertIn("2/3", effect.status)
-        effect.update(_context(0.2, keys={"return"}))
-        self.assertIn("3/3", effect.status)
 
 
 class RenderingAndLifecycleTests(unittest.TestCase):
@@ -369,7 +343,7 @@ class RenderingAndLifecycleTests(unittest.TestCase):
         self.assertFalse(np.array_equal(output[20, 60], frame[20, 60]))
         np.testing.assert_array_equal(output[70, 60], frame[70, 60])
         np.testing.assert_array_equal(output[100, 10], frame[100, 10])
-        self.assertFalse(np.array_equal(output[7, 60], frame[7, 60]))
+        np.testing.assert_array_equal(output[7, 60], frame[7, 60])
 
     def test_light_falls_off_instead_of_painting_a_hard_shape(self) -> None:
         frame = np.full((240, 240, 3), (18, 24, 32), np.uint8)
